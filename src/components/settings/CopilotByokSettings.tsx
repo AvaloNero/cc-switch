@@ -42,7 +42,8 @@ const COPY = {
     targets: "同步目标",
     targetsDescription:
       "选择需要写入 chatLanguageModels.json 的 VS Code 版本和 Profile。取消全部选择即可关闭同步。",
-    noTargets: "没有检测到 VS Code Stable 或 Insiders。可在下方添加自定义 Profile 路径。",
+    noTargets:
+      "没有检测到 VS Code Stable 或 Insiders。可在下方添加自定义 Profile 路径。",
     defaultProfile: "默认 Profile",
     configExists: "已有配置",
     backupExists: "已有备份",
@@ -80,7 +81,8 @@ const COPY = {
     restoreNoop: "没有可恢复的备份或受管模型",
     customAdded: "自定义目标已添加",
     customRemoved: "自定义目标已移除",
-    confirmDelete: "确定删除这个 BYOK 模型吗？已同步到 VS Code 的旧模型会在下次同步时移除。",
+    confirmDelete:
+      "确定删除这个 BYOK 模型吗？已同步到 VS Code 的旧模型会在下次同步时移除。",
     confirmStop:
       "确定从所选 Profile 中移除所有 CC Switch 模型组吗？用户自己配置的其他 BYOK 模型不会受影响。",
   },
@@ -153,7 +155,9 @@ type BusyAction =
 function targetTitle(target: CopilotByokTargetState, defaultLabel: string) {
   const edition = target.editionName ?? target.profileName;
   const profile = target.isDefault ? defaultLabel : target.profileName;
-  return target.source === "custom" ? target.profileName : `${edition} · ${profile}`;
+  return target.source === "custom"
+    ? target.profileName
+    : `${edition} · ${profile}`;
 }
 
 export function CopilotByokSettings() {
@@ -162,7 +166,9 @@ export function CopilotByokSettings() {
   const [state, setState] = useState<CopilotByokState | null>(null);
   const [busy, setBusy] = useState<BusyAction>("load");
   const [editorOpen, setEditorOpen] = useState(false);
-  const [editingModel, setEditingModel] = useState<CopilotByokModel | null>(null);
+  const [editingModel, setEditingModel] = useState<CopilotByokModel | null>(
+    null,
+  );
   const [customName, setCustomName] = useState("");
   const [customPath, setCustomPath] = useState("");
 
@@ -570,8 +576,12 @@ export function CopilotByokSettings() {
                       {model.url}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                      <span>Context: {model.contextWindow.toLocaleString()}</span>
-                      <span>Output: {model.maxOutputTokens.toLocaleString()}</span>
+                      <span>
+                        Context: {model.contextWindow.toLocaleString()}
+                      </span>
+                      <span>
+                        Output: {model.maxOutputTokens.toLocaleString()}
+                      </span>
                       {model.toolCalling ? <span>Tools</span> : null}
                       {model.vision ? <span>Vision</span> : null}
                       {model.thinking ? <span>Thinking</span> : null}

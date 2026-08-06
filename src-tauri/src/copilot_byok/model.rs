@@ -155,9 +155,7 @@ impl CopilotByokModel {
             )));
         }
         for (name, value) in &self.request_headers {
-            if name.trim().is_empty()
-                || name.contains(['\r', '\n'])
-                || value.contains(['\r', '\n'])
+            if name.trim().is_empty() || name.contains(['\r', '\n']) || value.contains(['\r', '\n'])
             {
                 return Err(AppError::InvalidInput(
                     "Copilot BYOK request headers must not contain empty names or newlines"

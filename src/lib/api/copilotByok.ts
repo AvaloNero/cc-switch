@@ -1,9 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type CopilotByokApiType =
-  | "chat-completions"
-  | "responses"
-  | "messages";
+export type CopilotByokApiType = "chat-completions" | "responses" | "messages";
 
 export type CopilotByokReasoningEffortFormat = CopilotByokApiType;
 
@@ -119,10 +116,9 @@ export const copilotByokApi = {
   removeManagedModels(
     targetIds?: string[] | null,
   ): Promise<CopilotByokSyncResult> {
-    return invoke<CopilotByokSyncResult>(
-      "copilot_byok_remove_managed_models",
-      { targetIds: targetIds?.length ? targetIds : null },
-    );
+    return invoke<CopilotByokSyncResult>("copilot_byok_remove_managed_models", {
+      targetIds: targetIds?.length ? targetIds : null,
+    });
   },
 
   restoreBackup(targetId: string): Promise<boolean> {

@@ -106,10 +106,7 @@ export function CopilotByokModelDialog({
     value: CopilotByokModel[K],
   ) => setDraft((current) => ({ ...current, [key]: value }));
 
-  const parsePositiveInteger = (
-    value: string,
-    fallback: number,
-  ): number => {
+  const parsePositiveInteger = (value: string, fallback: number): number => {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
   };
@@ -154,7 +151,9 @@ export function CopilotByokModelDialog({
         supportsReasoningEffort: [...new Set(efforts)],
       });
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : String(saveError));
+      setError(
+        saveError instanceof Error ? saveError.message : String(saveError),
+      );
     }
   };
 
@@ -319,7 +318,10 @@ export function CopilotByokModelDialog({
                 ["zeroDataRetentionEnabled", "Zero Data Retention"],
               ] as const
             ).map(([key, label]) => (
-              <div key={key} className="flex items-center justify-between gap-3">
+              <div
+                key={key}
+                className="flex items-center justify-between gap-3"
+              >
                 <Label htmlFor={`copilot-cap-${key}`}>{label}</Label>
                 <Switch
                   id={`copilot-cap-${key}`}
@@ -358,7 +360,9 @@ export function CopilotByokModelDialog({
               <Input
                 id="copilot-reasoning-efforts"
                 value={reasoningEffortsText}
-                onChange={(event) => setReasoningEffortsText(event.target.value)}
+                onChange={(event) =>
+                  setReasoningEffortsText(event.target.value)
+                }
                 placeholder="low, medium, high"
               />
             </div>
@@ -369,9 +373,7 @@ export function CopilotByokModelDialog({
                 onValueChange={(value) =>
                   update(
                     "reasoningEffortFormat",
-                    value === "auto"
-                      ? null
-                      : (value as CopilotByokApiType),
+                    value === "auto" ? null : (value as CopilotByokApiType),
                   )
                 }
               >
@@ -391,7 +393,9 @@ export function CopilotByokModelDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="copilot-request-headers">Request Headers (JSON)</Label>
+            <Label htmlFor="copilot-request-headers">
+              Request Headers (JSON)
+            </Label>
             <Textarea
               id="copilot-request-headers"
               value={headersText}
