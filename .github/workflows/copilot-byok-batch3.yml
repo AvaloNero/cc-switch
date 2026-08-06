@@ -10,12 +10,12 @@ permissions:
 
 concurrency:
   group: copilot-byok-batch3
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate-and-wire:
     if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout feature branch
         uses: actions/checkout@v6
