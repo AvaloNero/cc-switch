@@ -70,6 +70,16 @@ export interface CopilotByokSyncResult {
   changedTargetCount: number;
 }
 
+export interface CopilotByokImportResult {
+  targetId: string;
+  importedGroupCount: number;
+  importedModelCount: number;
+  reusedModelCount: number;
+  skippedGroupCount: number;
+  changedTargetCount: number;
+  warnings: string[];
+}
+
 export const copilotByokApi = {
   getState(): Promise<CopilotByokState> {
     return invoke<CopilotByokState>("copilot_byok_get_state");
@@ -106,6 +116,12 @@ export const copilotByokApi = {
   deleteModel(modelId: string): Promise<CopilotByokState> {
     return invoke<CopilotByokState>("copilot_byok_delete_model", {
       modelId,
+    });
+  },
+
+  importModels(targetId: string): Promise<CopilotByokImportResult> {
+    return invoke<CopilotByokImportResult>("copilot_byok_import_models", {
+      targetId,
     });
   },
 
