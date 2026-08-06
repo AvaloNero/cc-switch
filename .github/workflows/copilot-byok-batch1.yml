@@ -24,8 +24,9 @@ jobs:
           fetch-depth: 0
 
       - name: Wire backend module and commands
-        shell: python
+        shell: bash
         run: |
+          python3 - <<'PY'
           from pathlib import Path
 
           path = Path("src-tauri/src/lib.rs")
@@ -39,25 +40,28 @@ jobs:
               text = text.replace(module_anchor, module_replacement, 1)
 
           command_anchor = "            commands::copilot_get_usage_for_account,\n            // OMO commands\n"
-          command_replacement = """            commands::copilot_get_usage_for_account,
-            // VS Code Copilot BYOK model catalog
-            commands::copilot_byok_get_state,
-            commands::copilot_byok_set_targets,
-            commands::copilot_byok_add_custom_target,
-            commands::copilot_byok_remove_custom_target,
-            commands::copilot_byok_upsert_model,
-            commands::copilot_byok_delete_model,
-            commands::copilot_byok_sync,
-            commands::copilot_byok_remove_managed_models,
-            commands::copilot_byok_restore_backup,
-            // OMO commands
-"""
+          command_lines = [
+              "            commands::copilot_get_usage_for_account,",
+              "            // VS Code Copilot BYOK model catalog",
+              "            commands::copilot_byok_get_state,",
+              "            commands::copilot_byok_set_targets,",
+              "            commands::copilot_byok_add_custom_target,",
+              "            commands::copilot_byok_remove_custom_target,",
+              "            commands::copilot_byok_upsert_model,",
+              "            commands::copilot_byok_delete_model,",
+              "            commands::copilot_byok_sync,",
+              "            commands::copilot_byok_remove_managed_models,",
+              "            commands::copilot_byok_restore_backup,",
+              "            // OMO commands",
+          ]
+          command_replacement = "\n".join(command_lines) + "\n"
           if "commands::copilot_byok_get_state," not in text:
               if text.count(command_anchor) != 1:
                   raise SystemExit("lib.rs command anchor changed")
               text = text.replace(command_anchor, command_replacement, 1)
 
           path.write_text(text, encoding="utf-8")
+          PY
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
