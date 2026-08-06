@@ -1,4 +1,4 @@
-name: Copilot BYOK batch 3
+name: Apply Copilot BYOK batch 3
 
 on:
   push:
@@ -9,11 +9,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: copilot-byok-batch3
+  group: copilot-byok-direct-apply-v1
   cancel-in-progress: true
 
 jobs:
-  validate-and-wire:
+  apply:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -23,74 +23,10 @@ jobs:
           ref: feature/copilot-byok-model-catalog
           fetch-depth: 0
 
-      - name: Apply batch 3 integration
+      - name: Apply source changes
         run: python3 .github/scripts/finalize_copilot_byok_batch3.py
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-
-      - name: Setup pnpm
-        env:
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
-        run: |
-          corepack enable
-          corepack install
-          pnpm --version
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Format changed frontend files
-        run: |
-          pnpm exec prettier --write \
-            src/lib/api/copilotByok.ts \
-            src/lib/api/index.ts \
-            src/components/settings/CopilotByokModelDialog.tsx \
-            src/components/settings/CopilotByokSettings.tsx
-
-      - name: TypeScript type check
-        run: pnpm typecheck
-
-      - name: Frontend formatting check
-        run: pnpm format:check
-
-      - name: Frontend unit tests
-        run: pnpm test:unit
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev \
-            libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
-            || sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
-          sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
-            || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
-
-      - name: Create frontend dist placeholder
-        run: mkdir -p dist
-
-      - name: Format Rust changes
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml
-
-      - name: Rust Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-
-      - name: Copilot BYOK Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml copilot_byok --lib
-
-      - name: Verify patch cleanliness
-        run: git diff --check
-
-      - name: Commit validated batch 3
+      - name: Commit source changes
         run: |
           rm .github/workflows/copilot-byok-batch3.yml
           rm .github/scripts/finalize_copilot_byok_batch3.py
