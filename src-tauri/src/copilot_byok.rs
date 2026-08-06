@@ -126,7 +126,18 @@ fn custom_target_state(
 
 fn build_state(store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
     let detected = vscode::discover_vscode_targets()?;
-    let selected_target_ids = sync::effective_selected_target_ids(&store, &detected);
+    let available_ids: HashSet<String> = detected
+        .iter()
+        .map(|target| target.id.clone())
+        .chain(
+            store
+                .custom_targets
+                .iter()
+                .map(|target| target.id.clone()),
+        )
+        .collect();
+    let mut selected_target_ids = sync::effective_selected_target_ids(&store, &detected);
+    selected_target_ids.retain(|id| available_ids.contains(id));
     let selected_ids: HashSet<String> = selected_target_ids.iter().cloned().collect();
 
     let mut targets: Vec<CopilotByokTargetState> = detected
@@ -160,16 +171,31 @@ fn build_state(store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
     })
 }
 
-fn effective_target_ids(store: &CopilotByokStore) -> Result<Vec<String>, AppError> {
-    let detected = vscode::discover_vscode_targets()?;
-    Ok(sync::effective_selected_target_ids(store, &detected))
-}
-
 fn sync_if_selected(store: &CopilotByokStore) -> Result<(), AppError> {
-    if effective_target_ids(store)?.is_empty() {
+    let detected = vscode::discover_vscode_targets()?;
+    let available_ids: HashSet<String> = detected
+        .iter()
+        .map(|target| target.id.clone())
+        .chain(
+            store
+                .custom_targets
+                .iter()
+                .map(|target| target.id.clone()),
+        )
+        .collect();
+    let selected_target_ids: Vec<String> =
+        sync::effective_selected_target_ids(store, &detected)
+            .into_iter()
+            .filter(|id| available_ids.contains(id))
+            .collect();
+    if selected_target_ids.is_empty() {
         return Ok(());
     }
-    sync::sync_store(store)?;
+
+    let mut available_store = store.clone();
+    available_store.targets_initialized = true;
+    available_store.selected_target_ids = selected_target_ids;
+    sync::sync_store(&available_store)?;
     Ok(())
 }
 
@@ -200,6 +226,7 @@ pub fn set_targets(target_ids: Vec<String>) -> Result<CopilotByokState, AppError
 
     let previous_ids: HashSet<String> = sync::effective_selected_target_ids(&current, &detected)
         .into_iter()
+        .filter(|id| valid_ids.contains(id))
         .collect();
     let next_ids: HashSet<String> = target_ids.iter().cloned().collect();
     let removed_ids: Vec<String> = previous_ids.difference(&next_ids).cloned().collect();
