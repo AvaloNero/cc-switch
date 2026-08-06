@@ -1,0 +1,64 @@
+name: Copilot BYOK compatibility check
+
+on:
+  push:
+    branches:
+      - feature/copilot-byok-model-catalog
+
+permissions:
+  contents: write
+
+concurrency:
+  group: copilot-byok-compat-check
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/copilot-byok-model-catalog
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            || sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
+          sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
+            || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
+
+      - name: Create frontend dist placeholder
+        run: mkdir -p dist
+
+      - name: Format Rust changes
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+
+      - name: Run Copilot BYOK tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml copilot_byok --lib
+
+      - name: Verify patch cleanliness
+        run: git diff --check
+
+      - name: Commit validated compatibility fix
+        run: |
+          rm .github/workflows/copilot-byok-compat-check.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: validate VS Code Copilot BYOK compatibility"
+          git push origin HEAD:feature/copilot-byok-model-catalog
