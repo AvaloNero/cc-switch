@@ -1,4 +1,6 @@
-use crate::copilot_byok::{self, CopilotByokModel, CopilotByokState, CopilotByokSyncResult};
+use crate::copilot_byok::{
+    self, CopilotByokImportResult, CopilotByokModel, CopilotByokState, CopilotByokSyncResult,
+};
 
 #[tauri::command]
 pub fn copilot_byok_get_state() -> Result<CopilotByokState, String> {
@@ -31,6 +33,11 @@ pub fn copilot_byok_upsert_model(model: CopilotByokModel) -> Result<CopilotByokS
 #[tauri::command(rename_all = "camelCase")]
 pub fn copilot_byok_delete_model(model_id: String) -> Result<CopilotByokState, String> {
     copilot_byok::delete_model(&model_id).map_err(Into::into)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn copilot_byok_import_models(target_id: String) -> Result<CopilotByokImportResult, String> {
+    copilot_byok::import_models(&target_id).map_err(Into::into)
 }
 
 #[tauri::command]
