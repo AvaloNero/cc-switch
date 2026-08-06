@@ -1,4 +1,4 @@
-use super::{current_provider, load_store, Store};
+use super::{current_provider, Store};
 use crate::error::AppError;
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Json};
@@ -11,7 +11,7 @@ use futures::StreamExt;
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
@@ -19,6 +19,7 @@ const ROUTE: &str = "/copilot/v1/chat/completions";
 const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 
 static RUNTIME: Lazy<Mutex<Option<Runtime>>> = Lazy::new(|| Mutex::new(None));
+static ACTIVE_STORE: Lazy<RwLock<Option<Store>>> = Lazy::new(|| RwLock::new(None));
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 struct Runtime {
@@ -71,10 +72,28 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
     )
 }
 
+fn active_store() -> Result<Store, Response> {
+    ACTIVE_STORE
+        .read()
+        .map_err(|error| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Copilot proxy state lock failed: {error}"),
+            )
+        })?
+        .clone()
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Copilot proxy integration is not active",
+            )
+        })
+}
+
 async fn handle(headers: HeaderMap, Json(mut body): Json<Value>) -> Response {
-    let store = match load_store() {
+    let store = match active_store() {
         Ok(store) => store,
-        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Err(response) => return response,
     };
 
     if bearer_token(&headers) != Some(store.gateway_token.as_str()) {
@@ -128,7 +147,24 @@ async fn handle(headers: HeaderMap, Json(mut body): Json<Value>) -> Response {
         .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, error.to_string()))
 }
 
+fn clear_active_store() -> Result<(), AppError> {
+    let mut active = ACTIVE_STORE
+        .write()
+        .map_err(|error| AppError::Lock(error.to_string()))?;
+    *active = None;
+    Ok(())
+}
+
+fn set_active_store(store: &Store) -> Result<(), AppError> {
+    let mut active = ACTIVE_STORE
+        .write()
+        .map_err(|error| AppError::Lock(error.to_string()))?;
+    *active = Some(store.clone());
+    Ok(())
+}
+
 pub(super) async fn stop() -> Result<(), AppError> {
+    clear_active_store()?;
     let runtime = {
         let mut slot = RUNTIME
             .lock()
@@ -155,7 +191,7 @@ pub(super) async fn stop() -> Result<(), AppError> {
     Ok(())
 }
 
-pub(super) async fn ensure(port: u16) -> Result<(), AppError> {
+async fn ensure(port: u16) -> Result<(), AppError> {
     let already_running = RUNTIME
         .lock()
         .map_err(|error| AppError::Lock(error.to_string()))?
@@ -208,5 +244,11 @@ pub(super) async fn activate(store: &Store) -> Result<(), AppError> {
             "Select an enabled Copilot proxy provider first".to_string(),
         ));
     }
-    ensure(store.listen_port).await
+
+    ensure(store.listen_port).await?;
+    if let Err(error) = set_active_store(store) {
+        let _ = stop().await;
+        return Err(error);
+    }
+    Ok(())
 }
