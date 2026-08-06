@@ -8,8 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const STORE_FILE: &str = "copilot-byok.json";
-const STORE_VERSION: u32 = 1;
+const STORE_VERSION: u32 = 2;
 const MAX_TARGETS: usize = 64;
+const MAX_MODELS: usize = 256;
 
 fn default_store_version() -> u32 {
     STORE_VERSION
@@ -45,6 +46,8 @@ pub struct CopilotByokStore {
     #[serde(default = "default_store_version")]
     pub version: u32,
     #[serde(default)]
+    pub targets_initialized: bool,
+    #[serde(default)]
     pub selected_target_ids: Vec<String>,
     #[serde(default)]
     pub custom_targets: Vec<CopilotByokCustomTarget>,
@@ -56,6 +59,7 @@ impl Default for CopilotByokStore {
     fn default() -> Self {
         Self {
             version: STORE_VERSION,
+            targets_initialized: false,
             selected_target_ids: Vec::new(),
             custom_targets: Vec::new(),
             models: Vec::new(),
@@ -92,6 +96,15 @@ pub fn validate_language_models_path(path: &Path) -> Result<(), AppError> {
 }
 
 fn normalize_store(store: &mut CopilotByokStore) -> Result<(), AppError> {
+    if store.version > STORE_VERSION {
+        return Err(AppError::Config(format!(
+            "Copilot BYOK store version {} is newer than supported version {STORE_VERSION}",
+            store.version
+        )));
+    }
+    if !store.selected_target_ids.is_empty() || !store.custom_targets.is_empty() {
+        store.targets_initialized = true;
+    }
     store.version = STORE_VERSION;
 
     let mut selected = HashSet::new();
@@ -119,8 +132,14 @@ fn normalize_store(store: &mut CopilotByokStore) -> Result<(), AppError> {
             "Copilot BYOK supports at most {MAX_TARGETS} selected or custom targets"
         )));
     }
+    if store.models.len() > MAX_MODELS {
+        return Err(AppError::InvalidInput(format!(
+            "Copilot BYOK supports at most {MAX_MODELS} models"
+        )));
+    }
 
     let mut model_ids = HashSet::new();
+    let mut model_names = HashSet::new();
     for model in &mut store.models {
         model.normalize();
         model.validate()?;
@@ -128,6 +147,12 @@ fn normalize_store(store: &mut CopilotByokStore) -> Result<(), AppError> {
             return Err(AppError::InvalidInput(format!(
                 "Duplicate Copilot BYOK model id: {}",
                 model.id
+            )));
+        }
+        if !model_names.insert(model.name.to_lowercase()) {
+            return Err(AppError::InvalidInput(format!(
+                "Duplicate Copilot BYOK display name: {}",
+                model.name
             )));
         }
     }
@@ -138,6 +163,7 @@ pub(crate) fn parse_store_value(value: Value) -> Result<CopilotByokStore, AppErr
     let mut store = if value.get("version").is_some()
         || value.get("selectedTargetIds").is_some()
         || value.get("customTargets").is_some()
+        || value.get("targetsInitialized").is_some()
     {
         serde_json::from_value(value).map_err(|error| {
             AppError::Config(format!("Failed to parse Copilot BYOK store: {error}"))
@@ -158,6 +184,7 @@ pub(crate) fn parse_store_value(value: Value) -> Result<CopilotByokStore, AppErr
             .filter(|value| !value.is_empty())
         {
             let custom = CopilotByokCustomTarget::from_path(&path, Some("Migrated target".into()))?;
+            migrated.targets_initialized = true;
             migrated.selected_target_ids.push(custom.id.clone());
             migrated.custom_targets.push(custom);
         }
@@ -199,6 +226,7 @@ pub fn save_store(store: &CopilotByokStore) -> Result<(), AppError> {
 
 pub fn set_selected_targets(target_ids: Vec<String>) -> Result<CopilotByokStore, AppError> {
     let mut store = load_store()?;
+    store.targets_initialized = true;
     store.selected_target_ids = target_ids;
     save_store(&store)?;
     load_store()
@@ -207,6 +235,7 @@ pub fn set_selected_targets(target_ids: Vec<String>) -> Result<CopilotByokStore,
 pub fn add_custom_target(path: String, name: Option<String>) -> Result<CopilotByokStore, AppError> {
     let custom = CopilotByokCustomTarget::from_path(path, name)?;
     let mut store = load_store()?;
+    store.targets_initialized = true;
     if let Some(existing) = store
         .custom_targets
         .iter_mut()
@@ -267,6 +296,7 @@ mod tests {
         .expect("migrate store");
 
         assert_eq!(store.version, STORE_VERSION);
+        assert!(store.targets_initialized);
         assert_eq!(store.custom_targets.len(), 1);
         assert_eq!(
             store.selected_target_ids,
@@ -289,6 +319,33 @@ mod tests {
             "models": []
         }))
         .expect("parse store");
+        assert!(store.targets_initialized);
         assert_eq!(store.selected_target_ids, vec!["stable:default"]);
+    }
+
+    #[test]
+    fn explicit_empty_target_selection_is_preserved() {
+        let store = parse_store_value(json!({
+            "version": 2,
+            "targetsInitialized": true,
+            "selectedTargetIds": [],
+            "customTargets": [],
+            "models": []
+        }))
+        .expect("parse store");
+        assert!(store.targets_initialized);
+        assert!(store.selected_target_ids.is_empty());
+    }
+
+    #[test]
+    fn rejects_future_store_versions() {
+        let result = parse_store_value(json!({
+            "version": STORE_VERSION + 1,
+            "targetsInitialized": true,
+            "selectedTargetIds": [],
+            "customTargets": [],
+            "models": []
+        }));
+        assert!(result.is_err());
     }
 }
