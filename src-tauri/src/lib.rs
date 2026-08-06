@@ -9,6 +9,7 @@ mod codex_history_migration;
 mod codex_state_db;
 mod commands;
 mod config;
+mod copilot_byok;
 mod database;
 mod deeplink;
 mod error;
@@ -1627,6 +1628,16 @@ pub fn run() {
             commands::copilot_get_models_for_account,
             commands::copilot_get_usage,
             commands::copilot_get_usage_for_account,
+            // VS Code Copilot BYOK model catalog
+            commands::copilot_byok_get_state,
+            commands::copilot_byok_set_targets,
+            commands::copilot_byok_add_custom_target,
+            commands::copilot_byok_remove_custom_target,
+            commands::copilot_byok_upsert_model,
+            commands::copilot_byok_delete_model,
+            commands::copilot_byok_sync,
+            commands::copilot_byok_remove_managed_models,
+            commands::copilot_byok_restore_backup,
             // OMO commands
             commands::read_omo_local_file,
             commands::get_current_omo_provider_id,

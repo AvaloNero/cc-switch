@@ -144,7 +144,9 @@ pub(crate) fn parse_store_value(value: Value) -> Result<CopilotByokStore, AppErr
         })?
     } else {
         let legacy: LegacyStore = serde_json::from_value(value).map_err(|error| {
-            AppError::Config(format!("Failed to parse legacy Copilot BYOK store: {error}"))
+            AppError::Config(format!(
+                "Failed to parse legacy Copilot BYOK store: {error}"
+            ))
         })?;
         let mut migrated = CopilotByokStore {
             models: legacy.models,
@@ -202,10 +204,7 @@ pub fn set_selected_targets(target_ids: Vec<String>) -> Result<CopilotByokStore,
     load_store()
 }
 
-pub fn add_custom_target(
-    path: String,
-    name: Option<String>,
-) -> Result<CopilotByokStore, AppError> {
+pub fn add_custom_target(path: String, name: Option<String>) -> Result<CopilotByokStore, AppError> {
     let custom = CopilotByokCustomTarget::from_path(path, name)?;
     let mut store = load_store()?;
     if let Some(existing) = store
@@ -269,7 +268,10 @@ mod tests {
 
         assert_eq!(store.version, STORE_VERSION);
         assert_eq!(store.custom_targets.len(), 1);
-        assert_eq!(store.selected_target_ids, vec![store.custom_targets[0].id.clone()]);
+        assert_eq!(
+            store.selected_target_ids,
+            vec![store.custom_targets[0].id.clone()]
+        );
     }
 
     #[test]

@@ -146,12 +146,7 @@ pub(crate) fn discover_from_roots(
                 continue;
             }
 
-            targets.push(target(
-                *edition,
-                user_dir,
-                Some(profile_id),
-                &entry.path(),
-            ));
+            targets.push(target(*edition, user_dir, Some(profile_id), &entry.path()));
         }
     }
 
@@ -168,7 +163,10 @@ pub fn find_target(
     targets: &[VsCodeProfileTarget],
     target_id: &str,
 ) -> Option<VsCodeProfileTarget> {
-    targets.iter().find(|target| target.id == target_id).cloned()
+    targets
+        .iter()
+        .find(|target| target.id == target_id)
+        .cloned()
 }
 
 #[cfg(test)]
@@ -190,10 +188,7 @@ mod tests {
         assert_eq!(targets[0].id, "stable:default");
         assert!(targets[0].config_exists);
         assert_eq!(targets[1].id, "stable:profile:work-profile");
-        assert_eq!(
-            targets[1].path(),
-            profile_dir.join(LANGUAGE_MODELS_FILE)
-        );
+        assert_eq!(targets[1].path(), profile_dir.join(LANGUAGE_MODELS_FILE));
     }
 
     #[test]
@@ -220,8 +215,8 @@ mod tests {
         fs::create_dir_all(&outside).expect("create outside directory");
         symlink(&outside, profiles_dir.join("linked")).expect("create symlink");
 
-        let targets = discover_from_roots(&[(VsCodeEdition::Stable, user_dir)])
-            .expect("discover targets");
+        let targets =
+            discover_from_roots(&[(VsCodeEdition::Stable, user_dir)]).expect("discover targets");
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id, "stable:default");
     }

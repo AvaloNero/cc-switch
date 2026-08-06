@@ -66,7 +66,10 @@ fn backup_path(path: &Path) -> PathBuf {
 fn inspect_path(path: &Path) -> (usize, Option<String>) {
     match sync::read_language_model_groups(path) {
         Ok(groups) => (
-            groups.iter().filter(|group| is_managed_group(group)).count(),
+            groups
+                .iter()
+                .filter(|group| is_managed_group(group))
+                .count(),
             None,
         ),
         Err(error) => (0, Some(error.to_string())),
@@ -167,7 +170,12 @@ pub fn set_targets(target_ids: Vec<String>) -> Result<CopilotByokState, AppError
     let valid_ids: HashSet<String> = detected
         .iter()
         .map(|target| target.id.clone())
-        .chain(current.custom_targets.iter().map(|target| target.id.clone()))
+        .chain(
+            current
+                .custom_targets
+                .iter()
+                .map(|target| target.id.clone()),
+        )
         .collect();
     if let Some(invalid) = target_ids.iter().find(|id| !valid_ids.contains(*id)) {
         return Err(AppError::InvalidInput(format!(
@@ -177,10 +185,7 @@ pub fn set_targets(target_ids: Vec<String>) -> Result<CopilotByokState, AppError
     build_state(store::set_selected_targets(target_ids)?)
 }
 
-pub fn add_custom_target(
-    path: String,
-    name: Option<String>,
-) -> Result<CopilotByokState, AppError> {
+pub fn add_custom_target(path: String, name: Option<String>) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
     build_state(store::add_custom_target(path, name)?)
 }

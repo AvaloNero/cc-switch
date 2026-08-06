@@ -1,5 +1,5 @@
 use super::model::{is_managed_group, CopilotByokModel};
-use super::store::{CopilotByokStore, CopilotByokCustomTarget};
+use super::store::{CopilotByokCustomTarget, CopilotByokStore};
 use super::vscode::{discover_vscode_targets, VsCodeProfileTarget};
 use crate::error::AppError;
 use serde::Serialize;
@@ -261,10 +261,13 @@ mod tests {
             json!({"name": "CC Switch: Old", "vendor": "customendpoint"}),
         ];
         let merged = merge_managed_groups(existing, &[]);
-        assert_eq!(merged, vec![json!({
-            "name": "User model",
-            "vendor": "customendpoint"
-        })]);
+        assert_eq!(
+            merged,
+            vec![json!({
+                "name": "User model",
+                "vendor": "customendpoint"
+            })]
+        );
     }
 
     #[test]
