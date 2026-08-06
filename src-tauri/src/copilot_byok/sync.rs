@@ -40,12 +40,7 @@ fn ensure_regular_target(path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-pub(crate) fn read_language_model_groups(path: &Path) -> Result<Vec<Value>, AppError> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    ensure_regular_target(path)?;
-
+fn ensure_file_size(path: &Path) -> Result<(), AppError> {
     let metadata = fs::metadata(path).map_err(|error| AppError::io(path, error))?;
     if metadata.len() > MAX_CONFIG_BYTES {
         return Err(AppError::InvalidInput(format!(
@@ -54,6 +49,15 @@ pub(crate) fn read_language_model_groups(path: &Path) -> Result<Vec<Value>, AppE
             path.display()
         )));
     }
+    Ok(())
+}
+
+pub(crate) fn read_language_model_groups(path: &Path) -> Result<Vec<Value>, AppError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    ensure_regular_target(path)?;
+    ensure_file_size(path)?;
 
     let text = fs::read_to_string(path).map_err(|error| AppError::io(path, error))?;
     if text.trim().is_empty() {
@@ -79,6 +83,8 @@ fn create_backup_once(path: &Path) -> Result<(), AppError> {
     }
     let backup = backup_path(path);
     if backup.exists() {
+        ensure_regular_target(&backup)?;
+        ensure_file_size(&backup)?;
         return Ok(());
     }
     fs::copy(path, &backup).map_err(|error| AppError::io(&backup, error))?;
@@ -130,7 +136,7 @@ pub fn effective_selected_target_ids(
     store: &CopilotByokStore,
     discovered: &[VsCodeProfileTarget],
 ) -> Vec<String> {
-    if !store.selected_target_ids.is_empty() {
+    if store.targets_initialized {
         return store.selected_target_ids.clone();
     }
 
@@ -168,7 +174,7 @@ pub fn sync_store(store: &CopilotByokStore) -> Result<CopilotByokSyncResult, App
     let target_ids = effective_selected_target_ids(store, &discovered);
     if target_ids.is_empty() {
         return Err(AppError::InvalidInput(
-            "No VS Code profile is available for Copilot BYOK sync".to_string(),
+            "No VS Code profile is selected for Copilot BYOK sync".to_string(),
         ));
     }
 
@@ -239,7 +245,11 @@ pub fn restore_backup(store: &CopilotByokStore, target_id: &str) -> Result<bool,
     let backup = backup_path(&path);
 
     if backup.exists() {
+        if path.exists() {
+            ensure_regular_target(&path)?;
+        }
         ensure_regular_target(&backup)?;
+        ensure_file_size(&backup)?;
         let contents = fs::read(&backup).map_err(|error| AppError::io(&backup, error))?;
         crate::config::atomic_write(&path, &contents)?;
         return Ok(true);
@@ -270,38 +280,50 @@ mod tests {
         );
     }
 
+    fn target(id: &str, edition: super::super::vscode::VsCodeEdition) -> VsCodeProfileTarget {
+        VsCodeProfileTarget {
+            id: id.to_string(),
+            edition,
+            edition_name: id.to_string(),
+            profile_id: None,
+            profile_name: "Default".to_string(),
+            is_default: true,
+            user_dir: format!("/{id}"),
+            language_models_path: format!("/{id}/chatLanguageModels.json"),
+            config_exists: false,
+            backup_exists: false,
+        }
+    }
+
     #[test]
-    fn effective_selection_prefers_stable_default() {
+    fn effective_selection_prefers_stable_default_before_initialization() {
         let store = CopilotByokStore::default();
         let targets = vec![
-            VsCodeProfileTarget {
-                id: "insiders:default".to_string(),
-                edition: super::super::vscode::VsCodeEdition::Insiders,
-                edition_name: "Insiders".to_string(),
-                profile_id: None,
-                profile_name: "Default".to_string(),
-                is_default: true,
-                user_dir: "/insiders".to_string(),
-                language_models_path: "/insiders/chatLanguageModels.json".to_string(),
-                config_exists: false,
-                backup_exists: false,
-            },
-            VsCodeProfileTarget {
-                id: "stable:default".to_string(),
-                edition: super::super::vscode::VsCodeEdition::Stable,
-                edition_name: "Stable".to_string(),
-                profile_id: None,
-                profile_name: "Default".to_string(),
-                is_default: true,
-                user_dir: "/stable".to_string(),
-                language_models_path: "/stable/chatLanguageModels.json".to_string(),
-                config_exists: false,
-                backup_exists: false,
-            },
+            target(
+                "insiders:default",
+                super::super::vscode::VsCodeEdition::Insiders,
+            ),
+            target(
+                "stable:default",
+                super::super::vscode::VsCodeEdition::Stable,
+            ),
         ];
         assert_eq!(
             effective_selected_target_ids(&store, &targets),
             vec!["stable:default"]
         );
+    }
+
+    #[test]
+    fn effective_selection_preserves_explicit_empty_selection() {
+        let store = CopilotByokStore {
+            targets_initialized: true,
+            ..CopilotByokStore::default()
+        };
+        let targets = vec![target(
+            "stable:default",
+            super::super::vscode::VsCodeEdition::Stable,
+        )];
+        assert!(effective_selected_target_ids(&store, &targets).is_empty());
     }
 }
