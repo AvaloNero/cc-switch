@@ -268,10 +268,22 @@ pub fn import_from_target(
             continue;
         }
 
-        match parse_group(target_id, group)
-            .and_then(|parsed| add_group_models(&mut store, parsed))
-        {
+        let parsed = parse_group(target_id, group);
+        let secret_reference_group = parsed.as_ref().ok().and_then(|parsed| {
+            parsed
+                .models
+                .iter()
+                .any(|model| model.api_key.starts_with("${input:"))
+                .then(|| parsed.name.clone())
+        });
+
+        match parsed.and_then(|parsed| add_group_models(&mut store, parsed)) {
             Ok((imported, reused)) => {
+                if let Some(group_name) = secret_reference_group {
+                    warnings.push(format!(
+                        "{group_name} keeps a VS Code SecretStorage reference; other profiles may need the secret to be entered again"
+                    ));
+                }
                 accepted_indexes.insert(index);
                 imported_group_count += 1;
                 imported_model_count += imported;
@@ -317,7 +329,7 @@ pub fn import_from_target(
         imported_model_count,
         reused_model_count,
         skipped_group_count,
-        changed_target_count: sync_result.changed_target_count,
+        changed_target_count: sync_result.changed_target_count + 1,
         warnings,
     })
 }
