@@ -1,36 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type CopilotByokApiType = "chat-completions" | "responses" | "messages";
-
-export type CopilotByokReasoningEffortFormat = CopilotByokApiType;
-
-export type CopilotByokEditTool =
-  | "find-replace"
-  | "multi-find-replace"
-  | "apply-patch"
-  | "code-rewrite";
-
 export interface CopilotByokModel {
   id: string;
-  modelId: string;
   name: string;
-  url: string;
+  endpoint: string;
   apiKey: string;
-  apiType: CopilotByokApiType;
+  modelId: string;
   enabled: boolean;
+  requestHeaders: Record<string, string>;
+  contextWindow: number;
+  maxOutputTokens: number;
   toolCalling: boolean;
   vision: boolean;
   thinking: boolean;
   streaming: boolean;
-  contextWindow: number;
-  maxInputTokens: number | null;
-  maxOutputTokens: number;
-  editTools: CopilotByokEditTool[];
-  zeroDataRetentionEnabled: boolean;
-  supportsReasoningEffort: string[];
-  reasoningEffortFormat: CopilotByokReasoningEffortFormat | null;
-  requestHeaders: Record<string, string>;
-  modelOptions: unknown;
 }
 
 export type VsCodeEdition = "stable" | "insiders";
@@ -51,33 +34,24 @@ export interface CopilotByokTargetState {
   readError: string | null;
 }
 
-export interface CopilotByokSecurityNotice {
-  apiKeysAreWrittenToVscodeConfig: boolean;
-  message: string;
-}
-
 export interface CopilotByokState {
   models: CopilotByokModel[];
   targets: CopilotByokTargetState[];
   selectedTargetIds: string[];
-  managedModelCount: number;
-  securityNotice: CopilotByokSecurityNotice;
+  currentProviderId: string | null;
+  integrationEnabled: boolean;
+  serverRunning: boolean;
+  listenPort: number;
+  proxyUrl: string;
+  fixedModelId: string;
 }
 
 export interface CopilotByokSyncResult {
   targetIds: string[];
   managedModelCount: number;
   changedTargetCount: number;
-}
-
-export interface CopilotByokImportResult {
-  targetId: string;
-  importedGroupCount: number;
-  importedModelCount: number;
-  reusedModelCount: number;
-  skippedGroupCount: number;
-  changedTargetCount: number;
-  warnings: string[];
+  integrationEnabled: boolean;
+  serverRunning: boolean;
 }
 
 export const copilotByokApi = {
@@ -119,21 +93,19 @@ export const copilotByokApi = {
     });
   },
 
-  importModels(targetId: string): Promise<CopilotByokImportResult> {
-    return invoke<CopilotByokImportResult>("copilot_byok_sync", {
-      targetId,
-    });
-  },
-
-  sync(): Promise<CopilotByokSyncResult> {
+  start(): Promise<CopilotByokSyncResult> {
     return invoke<CopilotByokSyncResult>("copilot_byok_sync", {
       targetId: null,
     });
   },
 
-  removeManagedModels(
-    targetIds?: string[] | null,
-  ): Promise<CopilotByokSyncResult> {
+  selectProvider(providerId: string): Promise<CopilotByokSyncResult> {
+    return invoke<CopilotByokSyncResult>("copilot_byok_sync", {
+      targetId: providerId,
+    });
+  },
+
+  stop(targetIds?: string[] | null): Promise<CopilotByokSyncResult> {
     return invoke<CopilotByokSyncResult>("copilot_byok_remove_managed_models", {
       targetIds: targetIds?.length ? targetIds : null,
     });
