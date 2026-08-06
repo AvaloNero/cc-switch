@@ -3,6 +3,14 @@ import { useTranslation } from "react-i18next";
 import type { AppId } from "@/lib/api";
 import type { VisibleApps } from "@/types";
 import { ProviderIcon } from "@/components/ProviderIcon";
+import { CopilotByokSettings } from "@/components/settings/CopilotByokSettings";
+import copilotByokIcon from "@/assets/icons/vscode-copilot-byok.png";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Popover,
   PopoverContent,
@@ -58,7 +66,6 @@ const APP_DISPLAY_NAME: Record<AppId, string> = {
   hermes: "Hermes",
 };
 
-/** 应用图标 + 角标（Claude Code / Desktop 用角标区分终端与桌面） */
 function AppGlyph({ app, isActive }: { app: AppId; isActive: boolean }) {
   const badgeConfig = APP_BADGE_ICON[app];
   const BadgeIcon = badgeConfig?.icon;
@@ -72,7 +79,7 @@ function AppGlyph({ app, isActive }: { app: AppId; isActive: boolean }) {
       {BadgeIcon && (
         <span
           className={cn(
-            "absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-[3px] border h-[11px] w-[11px]",
+            "absolute -bottom-0.5 -right-0.5 flex h-[11px] w-[11px] items-center justify-center rounded-[3px] border",
             isActive
               ? "bg-background border-border text-foreground"
               : "bg-muted border-background text-muted-foreground group-hover:bg-background group-hover:text-foreground",
@@ -102,6 +109,7 @@ export function AppSwitcher({
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
 
   const handleSwitch = (app: AppId) => {
     if (app === activeApp) return;
@@ -109,27 +117,22 @@ export function AppSwitcher({
     onSwitch(app);
   };
 
-  // Filter apps based on visibility settings (default all visible)
   const appsToShow = ALL_APPS.filter((app) => {
     if (!visibleApps) return true;
     return visibleApps[app];
   });
   const appCount = appsToShow.length;
-
   const [visibleCount, setVisibleCount] = useState(appCount);
 
-  // 宽度必须取父弹性槽而非自身：自身宽度随可见数量变化，
-  // 用它做输入会形成收起→变窄→再收起的反馈循环
   useLayoutEffect(() => {
     const root = rootRef.current;
     const slot = root?.parentElement;
     if (!root || !slot) return;
 
     const compute = () => {
-      const sample = root.querySelector("button");
+      const sample = root.querySelector<HTMLButtonElement>("button[data-app-item]");
       if (!sample) return;
       const itemWidth = sample.offsetWidth;
-      // jsdom 或未完成布局时 offsetWidth 为 0，保持全部可见
       if (itemWidth <= 0) return;
       const rootStyle = window.getComputedStyle(root);
       const gap = parseFloat(rootStyle.columnGap) || 0;
@@ -137,14 +140,17 @@ export function AppSwitcher({
         (parseFloat(rootStyle.paddingLeft) || 0) +
         (parseFloat(rootStyle.paddingRight) || 0);
       const available = slot.clientWidth;
-      const widthAll = padding + appCount * itemWidth + (appCount - 1) * gap;
+      const totalItems = appCount + 1;
+      const widthAll =
+        padding + totalItems * itemWidth + Math.max(0, totalItems - 1) * gap;
       if (widthAll <= available) {
         setVisibleCount(appCount);
         return;
       }
-      // 「更多」按钮与应用按钮同宽（同 padding + 同尺寸图标）
+
+      const reservedForCopilotAndMore = itemWidth * 2 + gap * 2;
       const fit = Math.floor(
-        (available - padding - itemWidth) / (itemWidth + gap),
+        (available - padding - reservedForCopilotAndMore) / (itemWidth + gap),
       );
       setVisibleCount(Math.max(1, Math.min(appCount - 1, fit)));
     };
@@ -156,78 +162,123 @@ export function AppSwitcher({
   }, [appCount]);
 
   const visibleList = appsToShow.slice(0, Math.max(1, visibleCount));
-  // 激活应用被收进溢出区时，顶替最后一个可见位，保证始终可点亮
   if (appsToShow.includes(activeApp) && !visibleList.includes(activeApp)) {
     visibleList[visibleList.length - 1] = activeApp;
   }
   const overflowList = appsToShow.filter((app) => !visibleList.includes(app));
 
   return (
-    <div
-      ref={rootRef}
-      className="inline-flex bg-muted rounded-xl p-1 gap-1"
-      style={{ WebkitAppRegion: "no-drag" } as any}
-    >
-      {visibleList.map((app) => {
-        const isActive = activeApp === app;
-        return (
-          <button
-            key={app}
-            type="button"
-            onClick={() => handleSwitch(app)}
-            title={APP_DISPLAY_NAME[app]}
-            aria-label={APP_DISPLAY_NAME[app]}
-            className={cn(
-              "group inline-flex items-center px-3 h-8 rounded-md text-sm font-medium transition-all duration-200",
-              isActive
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground hover:bg-background/50",
-            )}
-          >
-            <AppGlyph app={app} isActive={isActive} />
-          </button>
-        );
-      })}
-      {overflowList.length > 0 && (
-        <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-          <PopoverTrigger asChild>
+    <>
+      <div
+        ref={rootRef}
+        className="inline-flex gap-1 rounded-xl bg-muted p-1"
+        style={{ WebkitAppRegion: "no-drag" } as any}
+      >
+        {visibleList.map((app) => {
+          const isActive = activeApp === app;
+          return (
             <button
+              key={app}
               type="button"
-              title={t("appSwitcher.more")}
-              aria-label={t("appSwitcher.more")}
+              data-app-item
+              onClick={() => handleSwitch(app)}
+              title={APP_DISPLAY_NAME[app]}
+              aria-label={APP_DISPLAY_NAME[app]}
               className={cn(
-                "inline-flex items-center px-3 h-8 rounded-md transition-all duration-200",
-                moreOpen
+                "group inline-flex h-8 items-center rounded-md px-3 text-sm font-medium transition-all duration-200",
+                isActive
                   ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-background/50",
+                  : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
               )}
             >
-              <MoreHorizontal size={20} className="shrink-0" />
+              <AppGlyph app={app} isActive={isActive} />
             </button>
-          </PopoverTrigger>
-          <PopoverContent
-            side="bottom"
-            align="end"
-            sideOffset={6}
-            className="z-[100] w-56 p-1"
-          >
-            {overflowList.map((app) => (
+          );
+        })}
+
+        <button
+          type="button"
+          onClick={() => setCopilotOpen(true)}
+          title="VS Code Copilot BYOK"
+          aria-label="VS Code Copilot BYOK"
+          className={cn(
+            "group inline-flex h-8 items-center rounded-md px-3 text-sm font-medium transition-all duration-200",
+            copilotOpen
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+          )}
+        >
+          <img
+            src={copilotByokIcon}
+            alt=""
+            aria-hidden="true"
+            className="h-5 w-5 shrink-0 rounded object-cover"
+          />
+        </button>
+
+        {overflowList.length > 0 && (
+          <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+            <PopoverTrigger asChild>
               <button
-                key={app}
                 type="button"
-                onClick={() => {
-                  setMoreOpen(false);
-                  handleSwitch(app);
-                }}
-                className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title={t("appSwitcher.more")}
+                aria-label={t("appSwitcher.more")}
+                className={cn(
+                  "inline-flex h-8 items-center rounded-md px-3 transition-all duration-200",
+                  moreOpen
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+                )}
               >
-                <AppGlyph app={app} isActive={false} />
-                <span className="truncate">{APP_DISPLAY_NAME[app]}</span>
+                <MoreHorizontal size={20} className="shrink-0" />
               </button>
-            ))}
-          </PopoverContent>
-        </Popover>
-      )}
-    </div>
+            </PopoverTrigger>
+            <PopoverContent
+              side="bottom"
+              align="end"
+              sideOffset={6}
+              className="z-[100] w-56 p-1"
+            >
+              {overflowList.map((app) => (
+                <button
+                  key={app}
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    handleSwitch(app);
+                  }}
+                  className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <AppGlyph app={app} isActive={false} />
+                  <span className="truncate">{APP_DISPLAY_NAME[app]}</span>
+                </button>
+              ))}
+            </PopoverContent>
+          </Popover>
+        )}
+      </div>
+
+      <Dialog open={copilotOpen} onOpenChange={setCopilotOpen}>
+        <DialogContent
+          zIndex="alert"
+          className="flex max-h-[92vh] max-w-6xl flex-col overflow-hidden"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-3">
+              <img
+                src={copilotByokIcon}
+                alt=""
+                aria-hidden="true"
+                className="h-8 w-8 rounded-md object-cover"
+              />
+              VS Code Copilot BYOK
+            </DialogTitle>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+            <CopilotByokSettings />
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
