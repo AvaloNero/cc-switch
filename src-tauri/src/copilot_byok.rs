@@ -1,336 +1,221 @@
+mod model;
+mod store;
+mod sync;
+mod vscode;
+
+pub use model::CopilotByokModel;
+pub use sync::CopilotByokSyncResult;
+pub use vscode::{VsCodeEdition, VsCodeProfileTarget};
+
 use crate::error::AppError;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::fs;
+use model::is_managed_group;
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
+use store::{CopilotByokCustomTarget, CopilotByokStore};
 
-const STORE_FILE: &str = "copilot-byok.json";
-const MANAGED_PREFIX: &str = "CC Switch:";
+static OPERATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-fn default_true() -> bool {
-    true
-}
-fn default_context_window() -> u64 {
-    262_144
-}
-fn default_max_output_tokens() -> u64 {
-    32_768
-}
-fn default_api_type() -> String {
-    "chat-completions".to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CopilotByokModel {
+pub struct CopilotByokTargetState {
     pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub api_key: String,
-    #[serde(default = "default_api_type")]
-    pub api_type: String,
-    pub url: String,
-    pub model_id: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_true")]
-    pub tool_calling: bool,
-    #[serde(default)]
-    pub vision: bool,
-    #[serde(default = "default_true")]
-    pub thinking: bool,
-    #[serde(default = "default_true")]
-    pub streaming: bool,
-    #[serde(default = "default_context_window")]
-    pub context_window: u64,
-    #[serde(default = "default_max_output_tokens")]
-    pub max_output_tokens: u64,
-    #[serde(default)]
-    pub request_headers: BTreeMap<String, String>,
-    #[serde(default)]
-    pub model_options: Value,
+    pub source: String,
+    pub edition: Option<VsCodeEdition>,
+    pub edition_name: Option<String>,
+    pub profile_id: Option<String>,
+    pub profile_name: String,
+    pub is_default: bool,
+    pub language_models_path: String,
+    pub config_exists: bool,
+    pub backup_exists: bool,
+    pub selected: bool,
+    pub managed_group_count: usize,
+    pub read_error: Option<String>,
 }
 
-impl CopilotByokModel {
-    fn normalize(&mut self) {
-        self.id = self.id.trim().to_string();
-        if self.id.is_empty() {
-            self.id = uuid::Uuid::new_v4().to_string();
-        }
-        self.name = self.name.trim().to_string();
-        self.api_key = self.api_key.trim().to_string();
-        self.api_type = self.api_type.trim().to_ascii_lowercase();
-        self.url = self.url.trim().to_string();
-        self.model_id = self.model_id.trim().to_string();
-        if self.context_window == 0 {
-            self.context_window = default_context_window();
-        }
-        if self.max_output_tokens == 0 {
-            self.max_output_tokens = default_max_output_tokens();
-        }
-    }
-
-    fn validate(&self) -> Result<(), AppError> {
-        if self.name.is_empty() {
-            return Err(AppError::Config("Copilot BYOK model name is required".to_string()));
-        }
-        if self.api_key.is_empty() {
-            return Err(AppError::Config("Copilot BYOK API key is required".to_string()));
-        }
-        if self.model_id.is_empty() {
-            return Err(AppError::Config("Copilot BYOK model id is required".to_string()));
-        }
-        let parsed = url::Url::parse(&self.url)
-            .map_err(|e| AppError::Config(format!("Invalid Copilot BYOK endpoint URL: {e}")))?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err(AppError::Config(
-                "Copilot BYOK endpoint must use http or https".to_string(),
-            ));
-        }
-        if !matches!(
-            self.api_type.as_str(),
-            "chat-completions" | "responses" | "messages"
-        ) {
-            return Err(AppError::Config(format!(
-                "Unsupported Copilot BYOK API type: {}",
-                self.api_type
-            )));
-        }
-        Ok(())
-    }
-
-    fn to_language_model_group(&self) -> Value {
-        let mut model = json!({
-            "id": self.model_id,
-            "name": self.name,
-            "url": self.url,
-            "toolCalling": self.tool_calling,
-            "vision": self.vision,
-            "thinking": self.thinking,
-            "streaming": self.streaming,
-            "contextWindow": self.context_window,
-            "maxOutputTokens": self.max_output_tokens,
-        });
-        if !self.model_options.is_null() && self.model_options != json!({}) {
-            model["modelOptions"] = self.model_options.clone();
-        }
-        if !self.request_headers.is_empty() {
-            model["requestHeaders"] = serde_json::to_value(&self.request_headers)
-                .unwrap_or_else(|_| json!({}));
-        }
-
-        json!({
-            "name": format!("{MANAGED_PREFIX} {}", self.name),
-            "vendor": "customendpoint",
-            "apiKey": self.api_key,
-            "apiType": self.api_type,
-            "models": [model],
-        })
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CopilotByokStore {
-    #[serde(default)]
-    pub config_path: Option<String>,
-    #[serde(default)]
-    pub models: Vec<CopilotByokModel>,
+pub struct CopilotByokSecurityNotice {
+    pub api_keys_are_written_to_vscode_config: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopilotByokState {
-    pub store: CopilotByokStore,
-    pub resolved_config_path: String,
-    pub config_exists: bool,
+    pub models: Vec<CopilotByokModel>,
+    pub targets: Vec<CopilotByokTargetState>,
+    pub selected_target_ids: Vec<String>,
     pub managed_model_count: usize,
+    pub security_notice: CopilotByokSecurityNotice,
 }
 
-fn store_path() -> PathBuf {
-    crate::config::get_app_config_dir().join(STORE_FILE)
+fn operation_guard() -> Result<MutexGuard<'static, ()>, AppError> {
+    OPERATION_LOCK
+        .lock()
+        .map_err(|error| AppError::Lock(error.to_string()))
 }
 
-fn default_vscode_config_path() -> PathBuf {
-    let base = dirs::config_dir().unwrap_or_else(crate::config::get_home_dir);
-    base.join("Code").join("User").join("chatLanguageModels.json")
+fn backup_path(path: &Path) -> PathBuf {
+    path.with_extension("json.cc-switch.bak")
 }
 
-fn resolve_config_path(store: &CopilotByokStore) -> PathBuf {
-    store
-        .config_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(default_vscode_config_path)
-}
-
-pub fn load_store() -> Result<CopilotByokStore, AppError> {
-    let path = store_path();
-    if !path.exists() {
-        return Ok(CopilotByokStore::default());
+fn inspect_path(path: &Path) -> (usize, Option<String>) {
+    match sync::read_language_model_groups(path) {
+        Ok(groups) => (
+            groups.iter().filter(|group| is_managed_group(group)).count(),
+            None,
+        ),
+        Err(error) => (0, Some(error.to_string())),
     }
-    let text = fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
-    serde_json::from_str(&text).map_err(|e| {
-        AppError::Config(format!("Failed to parse {}: {e}", path.display()))
-    })
 }
 
-fn save_store(store: &CopilotByokStore) -> Result<(), AppError> {
-    let path = store_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+fn detected_target_state(
+    target: VsCodeProfileTarget,
+    selected_ids: &HashSet<String>,
+) -> CopilotByokTargetState {
+    let path = target.path();
+    let (managed_group_count, read_error) = inspect_path(&path);
+    CopilotByokTargetState {
+        selected: selected_ids.contains(&target.id),
+        id: target.id,
+        source: "detected".to_string(),
+        edition: Some(target.edition),
+        edition_name: Some(target.edition_name),
+        profile_id: target.profile_id,
+        profile_name: target.profile_name,
+        is_default: target.is_default,
+        language_models_path: target.language_models_path,
+        config_exists: target.config_exists,
+        backup_exists: target.backup_exists,
+        managed_group_count,
+        read_error,
     }
-    crate::config::write_json_file(
-        &path,
-        &serde_json::to_value(store).map_err(|e| AppError::JsonSerialize { source: e })?,
-    )
 }
 
-fn read_language_models(path: &Path) -> Result<Vec<Value>, AppError> {
-    if !path.exists() {
-        return Ok(Vec::new());
+fn custom_target_state(
+    target: &CopilotByokCustomTarget,
+    selected_ids: &HashSet<String>,
+) -> CopilotByokTargetState {
+    let path = PathBuf::from(&target.language_models_path);
+    let (managed_group_count, read_error) = inspect_path(&path);
+    CopilotByokTargetState {
+        id: target.id.clone(),
+        source: "custom".to_string(),
+        edition: None,
+        edition_name: None,
+        profile_id: None,
+        profile_name: target.name.clone(),
+        is_default: false,
+        language_models_path: target.language_models_path.clone(),
+        config_exists: path.exists(),
+        backup_exists: backup_path(&path).exists(),
+        selected: selected_ids.contains(&target.id),
+        managed_group_count,
+        read_error,
     }
-    let text = fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
-    if text.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let value: Value = json5::from_str(&text).map_err(|e| {
-        AppError::Config(format!(
-            "Failed to parse VS Code language model config {}: {e}",
-            path.display()
-        ))
-    })?;
-    value.as_array().cloned().ok_or_else(|| {
-        AppError::Config(format!(
-            "VS Code language model config must be a JSON array: {}",
-            path.display()
-        ))
-    })
 }
 
-fn is_managed_group(value: &Value) -> bool {
-    value.get("vendor").and_then(Value::as_str) == Some("customendpoint")
-        && value
-            .get("name")
-            .and_then(Value::as_str)
-            .is_some_and(|name| name.starts_with(MANAGED_PREFIX))
-}
+fn build_state(store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
+    let detected = vscode::discover_vscode_targets()?;
+    let selected_target_ids = sync::effective_selected_target_ids(&store, &detected);
+    let selected_ids: HashSet<String> = selected_target_ids.iter().cloned().collect();
 
-fn write_language_models(path: &Path, groups: Vec<Value>) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
-    if path.exists() {
-        let backup = path.with_extension("json.cc-switch.bak");
-        if !backup.exists() {
-            fs::copy(path, &backup).map_err(|e| AppError::io(&backup, e))?;
-        }
-    }
-    crate::config::write_json_file(path, &Value::Array(groups))
-}
-
-pub fn sync_store(store: &CopilotByokStore) -> Result<(), AppError> {
-    let path = resolve_config_path(store);
-    let mut groups = read_language_models(&path)?;
-    groups.retain(|group| !is_managed_group(group));
-    groups.extend(
+    let mut targets: Vec<CopilotByokTargetState> = detected
+        .into_iter()
+        .map(|target| detected_target_state(target, &selected_ids))
+        .collect();
+    targets.extend(
         store
-            .models
+            .custom_targets
             .iter()
-            .filter(|model| model.enabled)
-            .map(CopilotByokModel::to_language_model_group),
+            .map(|target| custom_target_state(target, &selected_ids)),
     );
-    write_language_models(&path, groups)
+    targets.sort_by(|left, right| {
+        right
+            .selected
+            .cmp(&left.selected)
+            .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| left.profile_name.cmp(&right.profile_name))
+    });
+
+    Ok(CopilotByokState {
+        managed_model_count: store.models.iter().filter(|model| model.enabled).count(),
+        models: store.models,
+        targets,
+        selected_target_ids,
+        security_notice: CopilotByokSecurityNotice {
+            api_keys_are_written_to_vscode_config: true,
+            message: "VS Code Custom Endpoint BYOK stores the configured API key in chatLanguageModels.json. CC Switch restricts its own store file on Unix, but VS Code does not expose SecretStorage to external applications."
+                .to_string(),
+        },
+    })
 }
 
 pub fn get_state() -> Result<CopilotByokState, AppError> {
-    let store = load_store()?;
-    let path = resolve_config_path(&store);
-    Ok(CopilotByokState {
-        managed_model_count: store.models.iter().filter(|model| model.enabled).count(),
-        config_exists: path.exists(),
-        resolved_config_path: path.to_string_lossy().to_string(),
-        store,
-    })
+    let _guard = operation_guard()?;
+    build_state(store::load_store()?)
 }
 
-pub fn upsert_model(mut model: CopilotByokModel) -> Result<CopilotByokState, AppError> {
-    model.normalize();
-    model.validate()?;
-    let mut store = load_store()?;
-    if let Some(existing) = store.models.iter_mut().find(|item| item.id == model.id) {
-        *existing = model;
-    } else {
-        store.models.push(model);
+pub fn set_targets(target_ids: Vec<String>) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    let current = store::load_store()?;
+    let detected = vscode::discover_vscode_targets()?;
+    let valid_ids: HashSet<String> = detected
+        .iter()
+        .map(|target| target.id.clone())
+        .chain(current.custom_targets.iter().map(|target| target.id.clone()))
+        .collect();
+    if let Some(invalid) = target_ids.iter().find(|id| !valid_ids.contains(*id)) {
+        return Err(AppError::InvalidInput(format!(
+            "Unknown or unavailable Copilot BYOK target: {invalid}"
+        )));
     }
-    save_store(&store)?;
-    sync_store(&store)?;
-    get_state()
+    build_state(store::set_selected_targets(target_ids)?)
 }
 
-pub fn delete_model(id: &str) -> Result<CopilotByokState, AppError> {
-    let mut store = load_store()?;
-    store.models.retain(|model| model.id != id);
-    save_store(&store)?;
-    sync_store(&store)?;
-    get_state()
+pub fn add_custom_target(
+    path: String,
+    name: Option<String>,
+) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    build_state(store::add_custom_target(path, name)?)
 }
 
-pub fn set_config_path(path: Option<String>) -> Result<CopilotByokState, AppError> {
-    let mut store = load_store()?;
-    store.config_path = path
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    save_store(&store)?;
-    sync_store(&store)?;
-    get_state()
+pub fn remove_custom_target(target_id: &str) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    build_state(store::remove_custom_target(target_id)?)
 }
 
-pub fn sync() -> Result<CopilotByokState, AppError> {
-    let store = load_store()?;
-    sync_store(&store)?;
-    get_state()
+pub fn upsert_model(model: CopilotByokModel) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    build_state(store::upsert_model(model)?)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub fn delete_model(model_id: &str) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    build_state(store::delete_model(model_id)?)
+}
 
-    #[test]
-    fn managed_group_detection_is_scoped() {
-        assert!(is_managed_group(&json!({
-            "name": "CC Switch: Kimi",
-            "vendor": "customendpoint"
-        })));
-        assert!(!is_managed_group(&json!({
-            "name": "My Kimi",
-            "vendor": "customendpoint"
-        })));
-    }
+pub fn sync() -> Result<CopilotByokSyncResult, AppError> {
+    let _guard = operation_guard()?;
+    let store = store::load_store()?;
+    sync::sync_store(&store)
+}
 
-    #[test]
-    fn model_validation_rejects_non_http_url() {
-        let mut model = CopilotByokModel {
-            id: String::new(),
-            name: "test".to_string(),
-            api_key: "secret".to_string(),
-            api_type: "chat-completions".to_string(),
-            url: "file:///tmp/model".to_string(),
-            model_id: "model".to_string(),
-            enabled: true,
-            tool_calling: true,
-            vision: false,
-            thinking: true,
-            streaming: true,
-            context_window: 1,
-            max_output_tokens: 1,
-            request_headers: BTreeMap::new(),
-            model_options: json!({}),
-        };
-        model.normalize();
-        assert!(model.validate().is_err());
-    }
+pub fn remove_managed_models(
+    target_ids: Option<Vec<String>>,
+) -> Result<CopilotByokSyncResult, AppError> {
+    let _guard = operation_guard()?;
+    let store = store::load_store()?;
+    sync::remove_managed_groups(&store, target_ids)
+}
+
+pub fn restore_backup(target_id: &str) -> Result<bool, AppError> {
+    let _guard = operation_guard()?;
+    let store = store::load_store()?;
+    sync::restore_backup(&store, target_id)
 }
