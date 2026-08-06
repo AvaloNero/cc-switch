@@ -1,8 +1,10 @@
+mod import;
 mod model;
 mod store;
 mod sync;
 mod vscode;
 
+pub use import::CopilotByokImportResult;
 pub use model::CopilotByokModel;
 pub use sync::CopilotByokSyncResult;
 pub use vscode::{VsCodeEdition, VsCodeProfileTarget};
@@ -158,6 +160,19 @@ fn build_state(store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
     })
 }
 
+fn effective_target_ids(store: &CopilotByokStore) -> Result<Vec<String>, AppError> {
+    let detected = vscode::discover_vscode_targets()?;
+    Ok(sync::effective_selected_target_ids(store, &detected))
+}
+
+fn sync_if_selected(store: &CopilotByokStore) -> Result<(), AppError> {
+    if effective_target_ids(store)?.is_empty() {
+        return Ok(());
+    }
+    sync::sync_store(store)?;
+    Ok(())
+}
+
 pub fn get_state() -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
     build_state(store::load_store()?)
@@ -182,27 +197,58 @@ pub fn set_targets(target_ids: Vec<String>) -> Result<CopilotByokState, AppError
             "Unknown or unavailable Copilot BYOK target: {invalid}"
         )));
     }
-    build_state(store::set_selected_targets(target_ids)?)
+
+    let previous_ids: HashSet<String> = sync::effective_selected_target_ids(&current, &detected)
+        .into_iter()
+        .collect();
+    let next_ids: HashSet<String> = target_ids.iter().cloned().collect();
+    let removed_ids: Vec<String> = previous_ids.difference(&next_ids).cloned().collect();
+    if !removed_ids.is_empty() {
+        sync::remove_managed_groups(&current, Some(removed_ids))?;
+    }
+
+    let updated = store::set_selected_targets(target_ids)?;
+    sync_if_selected(&updated)?;
+    build_state(updated)
 }
 
 pub fn add_custom_target(path: String, name: Option<String>) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
-    build_state(store::add_custom_target(path, name)?)
+    let updated = store::add_custom_target(path, name)?;
+    sync_if_selected(&updated)?;
+    build_state(updated)
 }
 
 pub fn remove_custom_target(target_id: &str) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
+    let current = store::load_store()?;
+    if current
+        .custom_targets
+        .iter()
+        .any(|target| target.id == target_id)
+    {
+        sync::remove_managed_groups(&current, Some(vec![target_id.to_string()]))?;
+    }
     build_state(store::remove_custom_target(target_id)?)
 }
 
 pub fn upsert_model(model: CopilotByokModel) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
-    build_state(store::upsert_model(model)?)
+    let updated = store::upsert_model(model)?;
+    sync_if_selected(&updated)?;
+    build_state(updated)
 }
 
 pub fn delete_model(model_id: &str) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
-    build_state(store::delete_model(model_id)?)
+    let updated = store::delete_model(model_id)?;
+    sync_if_selected(&updated)?;
+    build_state(updated)
+}
+
+pub fn import_models(target_id: &str) -> Result<CopilotByokImportResult, AppError> {
+    let _guard = operation_guard()?;
+    import::import_from_target(store::load_store()?, target_id)
 }
 
 pub fn sync() -> Result<CopilotByokSyncResult, AppError> {
