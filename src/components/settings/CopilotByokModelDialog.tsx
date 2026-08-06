@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -11,49 +10,24 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import type {
-  CopilotByokApiType,
-  CopilotByokEditTool,
-  CopilotByokModel,
-} from "@/lib/api";
-
-const EDIT_TOOLS: CopilotByokEditTool[] = [
-  "find-replace",
-  "multi-find-replace",
-  "apply-patch",
-  "code-rewrite",
-];
+import type { CopilotByokModel } from "@/lib/api";
 
 const emptyModel = (): CopilotByokModel => ({
   id: crypto.randomUUID(),
-  modelId: "",
   name: "",
-  url: "",
+  endpoint: "",
   apiKey: "",
-  apiType: "chat-completions",
+  modelId: "",
   enabled: true,
+  requestHeaders: {},
+  contextWindow: 262144,
+  maxOutputTokens: 32768,
   toolCalling: true,
   vision: false,
   thinking: true,
   streaming: true,
-  contextWindow: 128000,
-  maxInputTokens: null,
-  maxOutputTokens: 8192,
-  editTools: [],
-  zeroDataRetentionEnabled: false,
-  supportsReasoningEffort: [],
-  reasoningEffortFormat: null,
-  requestHeaders: {},
-  modelOptions: {},
 });
 
 interface CopilotByokModelDialogProps {
@@ -74,8 +48,6 @@ export function CopilotByokModelDialog({
   const [draft, setDraft] = useState<CopilotByokModel>(emptyModel);
   const [showApiKey, setShowApiKey] = useState(false);
   const [headersText, setHeadersText] = useState("{}");
-  const [modelOptionsText, setModelOptionsText] = useState("{}");
-  const [reasoningEffortsText, setReasoningEffortsText] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -83,22 +55,24 @@ export function CopilotByokModelDialog({
     const next = model ? structuredClone(model) : emptyModel();
     setDraft(next);
     setHeadersText(JSON.stringify(next.requestHeaders ?? {}, null, 2));
-    setModelOptionsText(JSON.stringify(next.modelOptions ?? {}, null, 2));
-    setReasoningEffortsText(next.supportsReasoningEffort.join(", "));
-    setError(null);
     setShowApiKey(false);
+    setError(null);
   }, [model, open]);
-
-  const title = model ? "编辑 Copilot BYOK 模型" : "添加 Copilot BYOK 模型";
 
   const canSave = useMemo(
     () =>
       draft.name.trim().length > 0 &&
-      draft.modelId.trim().length > 0 &&
-      draft.url.trim().length > 0 &&
+      draft.endpoint.trim().length > 0 &&
       draft.apiKey.trim().length > 0 &&
+      draft.modelId.trim().length > 0 &&
       !saving,
-    [draft.apiKey, draft.modelId, draft.name, draft.url, saving],
+    [
+      draft.apiKey,
+      draft.endpoint,
+      draft.modelId,
+      draft.name,
+      saving,
+    ],
   );
 
   const update = <K extends keyof CopilotByokModel>(
@@ -106,7 +80,7 @@ export function CopilotByokModelDialog({
     value: CopilotByokModel[K],
   ) => setDraft((current) => ({ ...current, [key]: value }));
 
-  const parsePositiveInteger = (value: string, fallback: number): number => {
+  const parsePositiveInteger = (value: string, fallback: number) => {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
   };
@@ -114,41 +88,27 @@ export function CopilotByokModelDialog({
   const handleSave = async () => {
     setError(null);
     try {
-      const requestHeaders = JSON.parse(headersText || "{}") as unknown;
-      const modelOptions = JSON.parse(modelOptionsText || "{}") as unknown;
+      const parsedHeaders = JSON.parse(headersText || "{}") as unknown;
       if (
-        !requestHeaders ||
-        Array.isArray(requestHeaders) ||
-        typeof requestHeaders !== "object"
+        !parsedHeaders ||
+        Array.isArray(parsedHeaders) ||
+        typeof parsedHeaders !== "object"
       ) {
-        throw new Error("请求头必须是 JSON 对象");
+        throw new Error("Request Headers 必须是 JSON 对象");
       }
-      if (
-        !modelOptions ||
-        Array.isArray(modelOptions) ||
-        typeof modelOptions !== "object"
-      ) {
-        throw new Error("Model Options 必须是 JSON 对象");
-      }
-      const headers = Object.fromEntries(
-        Object.entries(requestHeaders as Record<string, unknown>).map(
-          ([key, value]) => [key, String(value)],
+      const requestHeaders = Object.fromEntries(
+        Object.entries(parsedHeaders as Record<string, unknown>).map(
+          ([name, value]) => [name, String(value)],
         ),
       );
-      const efforts = reasoningEffortsText
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean);
 
       await onSave({
         ...draft,
         name: draft.name.trim(),
-        modelId: draft.modelId.trim(),
-        url: draft.url.trim(),
+        endpoint: draft.endpoint.trim(),
         apiKey: draft.apiKey.trim(),
-        requestHeaders: headers,
-        modelOptions,
-        supportsReasoningEffort: [...new Set(efforts)],
+        modelId: draft.modelId.trim(),
+        requestHeaders,
       });
     } catch (saveError) {
       setError(
@@ -157,269 +117,151 @@ export function CopilotByokModelDialog({
     }
   };
 
-  const toggleEditTool = (tool: CopilotByokEditTool, checked: boolean) => {
-    update(
-      "editTools",
-      checked
-        ? [...new Set([...draft.editTools, tool])]
-        : draft.editTools.filter((item) => item !== tool),
-    );
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] max-w-3xl overflow-y-auto">
+      <DialogContent zIndex="alert" className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>
+            {model ? "编辑 Copilot 代理供应商" : "添加 Copilot 代理供应商"}
+          </DialogTitle>
         </DialogHeader>
 
-        <div className="grid gap-5 px-1 py-2">
+        <div className="space-y-5 px-6 py-2">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="copilot-byok-name">显示名称</Label>
+              <Label htmlFor="copilot-proxy-name">显示名称</Label>
               <Input
-                id="copilot-byok-name"
+                id="copilot-proxy-name"
                 value={draft.name}
                 onChange={(event) => update("name", event.target.value)}
-                placeholder="Kimi K3"
+                placeholder="Kimi Code Plan"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="copilot-byok-model-id">Model ID</Label>
+              <Label htmlFor="copilot-proxy-model">上游模型 ID</Label>
               <Input
-                id="copilot-byok-model-id"
+                id="copilot-proxy-model"
                 value={draft.modelId}
                 onChange={(event) => update("modelId", event.target.value)}
-                placeholder="kimi-k3"
+                placeholder="kimi-k2.5"
               />
             </div>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="copilot-byok-url">Endpoint URL</Label>
+            <Label htmlFor="copilot-proxy-endpoint">
+              Chat Completions 完整端点
+            </Label>
             <Input
-              id="copilot-byok-url"
-              value={draft.url}
-              onChange={(event) => update("url", event.target.value)}
+              id="copilot-proxy-endpoint"
+              value={draft.endpoint}
+              onChange={(event) => update("endpoint", event.target.value)}
               placeholder="https://api.example.com/v1/chat/completions"
+              className="font-mono text-xs"
             />
             <p className="text-xs text-muted-foreground">
-              可以填写完整 API 路径；VS Code 也会根据 API 类型补全标准路径。
+              该版本直接透传 OpenAI Chat Completions 请求；这里填写完整请求 URL，而不是仅填写 Base URL。
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="copilot-proxy-key">上游 API Key</Label>
+            <div className="flex gap-2">
+              <Input
+                id="copilot-proxy-key"
+                type={showApiKey ? "text" : "password"}
+                value={draft.apiKey}
+                onChange={(event) => update("apiKey", event.target.value)}
+                className="font-mono text-xs"
+              />
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                onClick={() => setShowApiKey((current) => !current)}
+                aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}
+              >
+                {showApiKey ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              真实密钥只保存在 CC Switch 配置中；VS Code 配置里只写入随机本地网关令牌。
             </p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="copilot-byok-api-type">API 类型</Label>
-              <Select
-                value={draft.apiType}
-                onValueChange={(value) =>
-                  update("apiType", value as CopilotByokApiType)
-                }
-              >
-                <SelectTrigger id="copilot-byok-api-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="chat-completions">
-                    Chat Completions
-                  </SelectItem>
-                  <SelectItem value="responses">Responses</SelectItem>
-                  <SelectItem value="messages">Anthropic Messages</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="copilot-byok-api-key">API Key</Label>
-              <div className="relative">
-                <Input
-                  id="copilot-byok-api-key"
-                  type={showApiKey ? "text" : "password"}
-                  value={draft.apiKey}
-                  onChange={(event) => update("apiKey", event.target.value)}
-                  className="pr-10"
-                />
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="absolute right-0 top-0 h-full"
-                  onClick={() => setShowApiKey((value) => !value)}
-                >
-                  {showApiKey ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-3">
-            <div className="space-y-2">
-              <Label htmlFor="copilot-context-window">Context Window</Label>
+              <Label htmlFor="copilot-proxy-context">Context Window</Label>
               <Input
-                id="copilot-context-window"
+                id="copilot-proxy-context"
                 type="number"
                 min={1}
                 value={draft.contextWindow}
                 onChange={(event) =>
                   update(
                     "contextWindow",
-                    parsePositiveInteger(event.target.value, 128000),
+                    parsePositiveInteger(event.target.value, 262144),
                   )
                 }
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="copilot-max-input">Max Input Tokens</Label>
+              <Label htmlFor="copilot-proxy-output">Max Output Tokens</Label>
               <Input
-                id="copilot-max-input"
-                type="number"
-                min={1}
-                value={draft.maxInputTokens ?? ""}
-                onChange={(event) =>
-                  update(
-                    "maxInputTokens",
-                    event.target.value
-                      ? parsePositiveInteger(event.target.value, 1)
-                      : null,
-                  )
-                }
-                placeholder="自动推导"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="copilot-max-output">Max Output Tokens</Label>
-              <Input
-                id="copilot-max-output"
+                id="copilot-proxy-output"
                 type="number"
                 min={1}
                 value={draft.maxOutputTokens}
                 onChange={(event) =>
                   update(
                     "maxOutputTokens",
-                    parsePositiveInteger(event.target.value, 8192),
+                    parsePositiveInteger(event.target.value, 32768),
                   )
                 }
               />
             </div>
           </div>
 
-          <div className="grid gap-3 rounded-lg border p-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3 rounded-lg border p-4 md:grid-cols-2">
             {(
               [
-                ["enabled", "启用"],
+                ["enabled", "启用供应商"],
                 ["toolCalling", "Tool Calling"],
                 ["vision", "Vision"],
                 ["thinking", "Thinking"],
                 ["streaming", "Streaming"],
-                ["zeroDataRetentionEnabled", "Zero Data Retention"],
               ] as const
             ).map(([key, label]) => (
-              <div
-                key={key}
-                className="flex items-center justify-between gap-3"
-              >
-                <Label htmlFor={`copilot-cap-${key}`}>{label}</Label>
+              <div key={key} className="flex items-center justify-between gap-3">
+                <Label htmlFor={`copilot-proxy-${key}`}>{label}</Label>
                 <Switch
-                  id={`copilot-cap-${key}`}
-                  checked={Boolean(draft[key])}
+                  id={`copilot-proxy-${key}`}
+                  checked={draft[key]}
                   onCheckedChange={(checked) => update(key, checked)}
                 />
               </div>
             ))}
           </div>
 
-          <div className="space-y-3">
-            <Label>Edit Tools</Label>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {EDIT_TOOLS.map((tool) => (
-                <label
-                  key={tool}
-                  className="flex items-center gap-2 rounded-md border p-3 text-sm"
-                >
-                  <Checkbox
-                    checked={draft.editTools.includes(tool)}
-                    onCheckedChange={(checked) =>
-                      toggleEditTool(tool, checked === true)
-                    }
-                  />
-                  <span>{tool}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="copilot-reasoning-efforts">
-                Reasoning Efforts
-              </Label>
-              <Input
-                id="copilot-reasoning-efforts"
-                value={reasoningEffortsText}
-                onChange={(event) =>
-                  setReasoningEffortsText(event.target.value)
-                }
-                placeholder="low, medium, high"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Reasoning Effort Format</Label>
-              <Select
-                value={draft.reasoningEffortFormat ?? "auto"}
-                onValueChange={(value) =>
-                  update(
-                    "reasoningEffortFormat",
-                    value === "auto" ? null : (value as CopilotByokApiType),
-                  )
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="auto">自动推导</SelectItem>
-                  <SelectItem value="chat-completions">
-                    Chat Completions
-                  </SelectItem>
-                  <SelectItem value="responses">Responses</SelectItem>
-                  <SelectItem value="messages">Messages</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
           <div className="space-y-2">
-            <Label htmlFor="copilot-request-headers">
-              Request Headers (JSON)
+            <Label htmlFor="copilot-proxy-headers">
+              额外 Request Headers（JSON）
             </Label>
             <Textarea
-              id="copilot-request-headers"
+              id="copilot-proxy-headers"
               value={headersText}
               onChange={(event) => setHeadersText(event.target.value)}
-              rows={5}
+              rows={6}
               className="font-mono text-xs"
               spellCheck={false}
             />
             <p className="text-xs text-muted-foreground">
-              自定义认证头可使用 VS Code 支持的 <code>${"${apiKey}"}</code>{" "}
-              占位符。
+              Authorization、Host、Content-Length 和传输相关请求头由代理管理，不能覆盖。
             </p>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="copilot-model-options">Model Options (JSON)</Label>
-            <Textarea
-              id="copilot-model-options"
-              value={modelOptionsText}
-              onChange={(event) => setModelOptionsText(event.target.value)}
-              rows={5}
-              className="font-mono text-xs"
-              spellCheck={false}
-            />
           </div>
 
           {error ? (
@@ -438,9 +280,9 @@ export function CopilotByokModelDialog({
           >
             取消
           </Button>
-          <Button type="button" onClick={handleSave} disabled={!canSave}>
+          <Button type="button" onClick={() => void handleSave()} disabled={!canSave}>
             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            保存模型
+            保存供应商
           </Button>
         </DialogFooter>
       </DialogContent>
