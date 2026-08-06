@@ -1,0 +1,64 @@
+name: Copilot BYOK batch 1 validation
+
+on:
+  push:
+    branches:
+      - feature/copilot-byok-model-catalog
+
+permissions:
+  contents: write
+
+concurrency:
+  group: copilot-byok-batch1-v2
+  cancel-in-progress: false
+
+jobs:
+  validate-and-wire:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/copilot-byok-model-catalog
+          fetch-depth: 0
+
+      - name: Wire backend module and commands
+        run: python3 .github/scripts/wire_copilot_byok_batch1.py
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            || sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
+          sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
+            || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
+
+      - name: Create frontend dist placeholder
+        run: mkdir -p dist
+
+      - name: Format Rust changes
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml
+
+      - name: Compile and run Copilot BYOK tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml copilot_byok --lib
+
+      - name: Verify patch cleanliness
+        run: git diff --check
+
+      - name: Commit validated batch
+        run: |
+          rm .github/workflows/copilot-byok-batch1-v2.yml
+          rm .github/scripts/wire_copilot_byok_batch1.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: complete Copilot BYOK backend batch 1"
+          git push origin HEAD:feature/copilot-byok-model-catalog
