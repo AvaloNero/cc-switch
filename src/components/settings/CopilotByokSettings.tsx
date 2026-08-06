@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
-  Download,
+  Check,
   KeyRound,
   Loader2,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
   Server,
-  ShieldAlert,
+  ShieldCheck,
+  Square,
   Trash2,
-  Unplug,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -34,122 +35,126 @@ import { CopilotByokModelDialog } from "./CopilotByokModelDialog";
 
 const COPY = {
   zh: {
-    title: "VS Code Copilot BYOK",
+    title: "VS Code Copilot BYOK · 切换代理版",
     description:
-      "像 OpenCode 一样维护可选模型目录；最终使用哪个模型仍由 VS Code 的模型选择器决定。",
+      "VS Code 始终选择固定模型“CC Switch Current”；在这里切换当前供应商后，后续 Copilot Chat 请求会透明转发到新的上游。",
+    limitationTitle: "作用范围",
+    limitation:
+      "该集成只接管 VS Code Copilot 的 Custom Endpoint Chat 模型，不接管行内代码补全、Next Edit Suggestions 或 Embeddings。上游必须兼容 OpenAI Chat Completions。",
+    securityTitle: "密钥隔离",
+    security:
+      "VS Code 的 chatLanguageModels.json 只保存随机本地网关令牌；真实上游 API Key 保存在 CC Switch 配置中。",
     refresh: "刷新",
-    loading: "正在读取 VS Code 配置…",
-    targets: "同步目标",
+    loading: "正在读取 Copilot 代理配置…",
+    integrationOn: "集成已启用",
+    integrationOff: "集成未启用",
+    serverRunning: "代理运行中",
+    serverStopped: "代理未运行",
+    fixedModel: "固定模型",
+    localEndpoint: "本地端点",
+    targets: "VS Code Profile",
     targetsDescription:
-      "选择要由 CC Switch 管理的 VS Code 版本和 Profile。模型增删、启停和目标变化会自动增量同步。",
+      "选择需要写入固定 CC Switch 模型的 Profile。集成启用后，目标变化会立即同步。",
     noTargets:
-      "没有检测到 VS Code Stable 或 Insiders，可在下方添加 chatLanguageModels.json 的绝对路径。",
+      "没有检测到 VS Code Stable 或 Insiders，可手动添加 chatLanguageModels.json 路径。",
     defaultProfile: "默认 Profile",
     configExists: "已有配置",
     backupExists: "已有备份",
-    managedGroups: "CC Switch 模型组",
-    importExisting: "导入并接管",
-    importSuccess: "已导入模型",
-    importedGroups: "接管组",
-    reusedModels: "复用模型",
-    skippedGroups: "跳过组",
-    importWarnings: "部分配置未导入",
+    managedGroups: "代理模型组",
     restore: "恢复备份",
     removeCustom: "移除目标",
-    customTarget: "自定义目标",
     customName: "目标名称（可选）",
     customPath: "chatLanguageModels.json 的绝对路径",
     addTarget: "添加并选中",
-    models: "模型目录",
-    modelsDescription:
-      "启用的模型会同时出现在所有已选 Profile 的 Copilot 模型选择器中。",
-    addModel: "添加模型",
-    noModels: "尚未配置 BYOK 模型。",
+    providers: "代理供应商",
+    providersDescription:
+      "当前供应商决定固定模型实际请求的上游端点与模型 ID。切换无需修改 VS Code 选择。",
+    addProvider: "添加供应商",
+    noProviders: "尚未配置代理供应商。",
+    current: "当前",
     enabled: "启用",
     disabled: "停用",
+    select: "设为当前",
     edit: "编辑",
     delete: "删除",
-    repairSync: "重新同步",
-    stopManaging: "停止管理所选 Profile",
-    selectedProfiles: "已选 Profile",
-    enabledModels: "启用模型",
-    changedFiles: "已更新文件",
-    securityTitle: "API Key 存储提示",
-    security:
-      "VS Code Custom Endpoint 会把 API Key 保存在 chatLanguageModels.json。外部应用无法写入 VS Code SecretStorage，因此同步后的密钥会出现在对应 Profile 配置文件中。",
-    readError: "配置读取失败",
-    saveModelSuccess: "模型已保存并自动同步",
-    deleteModelSuccess: "模型已删除并自动同步",
-    targetUpdateSuccess: "同步目标已更新并自动同步",
-    syncSuccess: "Copilot BYOK 已重新同步",
-    removeSuccess: "已从所选 Profile 移除 CC Switch 模型组",
-    restoreSuccess: "配置备份已恢复",
-    restoreNoop: "没有可恢复的备份或受管模型",
-    customAdded: "自定义目标已添加",
-    customRemoved: "自定义目标已移除",
-    confirmDelete:
-      "确定删除这个 BYOK 模型吗？已同步到 VS Code 的副本会立即自动移除。",
+    start: "启用并写入 VS Code",
+    resync: "重新写入固定模型",
+    stop: "停止接管并移除固定模型",
+    providerSaved: "供应商已保存",
+    providerDeleted: "供应商已删除",
+    providerSelected: "当前供应商已切换",
+    targetsUpdated: "Profile 选择已更新",
+    started: "Copilot 切换代理已启用",
+    stopped: "Copilot 切换代理已停止",
+    restored: "Profile 备份已恢复",
+    restoreNoop: "没有可恢复的备份或代理模型组",
+    targetAdded: "自定义 Profile 已添加",
+    targetRemoved: "自定义 Profile 已移除",
+    changedFiles: "更新文件",
+    confirmDelete: "确定删除这个代理供应商吗？",
     confirmStop:
-      "确定从所选 Profile 中移除所有 CC Switch 模型组吗？其他 BYOK 配置不会受影响。",
+      "确定从所选 Profile 移除固定 CC Switch 模型并停止本地代理吗？其他 BYOK 配置不会受影响。",
   },
   en: {
-    title: "VS Code Copilot BYOK",
+    title: "VS Code Copilot BYOK · Switch Proxy",
     description:
-      "Maintain an additive model catalog like OpenCode. VS Code still controls the selected model.",
+      "Select the fixed “CC Switch Current” model once in VS Code. Switching the current provider here transparently reroutes subsequent Copilot Chat requests.",
+    limitationTitle: "Scope",
+    limitation:
+      "This integration only controls VS Code Copilot Custom Endpoint chat models. It does not affect inline completions, Next Edit Suggestions, or embeddings. Upstreams must support OpenAI Chat Completions.",
+    securityTitle: "Credential isolation",
+    security:
+      "VS Code chatLanguageModels.json stores only a random local gateway token. Real upstream API keys remain in CC Switch configuration.",
     refresh: "Refresh",
-    loading: "Reading VS Code configuration…",
-    targets: "Sync targets",
+    loading: "Reading Copilot proxy configuration…",
+    integrationOn: "Integration enabled",
+    integrationOff: "Integration disabled",
+    serverRunning: "Proxy running",
+    serverStopped: "Proxy stopped",
+    fixedModel: "Fixed model",
+    localEndpoint: "Local endpoint",
+    targets: "VS Code profiles",
     targetsDescription:
-      "Choose the VS Code editions and profiles managed by CC Switch. Model edits, toggles, and target changes synchronize automatically.",
+      "Choose profiles that receive the fixed CC Switch model. Target changes synchronize immediately while integration is enabled.",
     noTargets:
-      "No VS Code Stable or Insiders installation was detected. Add an absolute chatLanguageModels.json path below.",
+      "No VS Code Stable or Insiders profile was detected. Add an absolute chatLanguageModels.json path manually.",
     defaultProfile: "Default profile",
     configExists: "Config exists",
     backupExists: "Backup exists",
-    managedGroups: "CC Switch groups",
-    importExisting: "Import and manage",
-    importSuccess: "Imported models",
-    importedGroups: "Managed groups",
-    reusedModels: "Reused models",
-    skippedGroups: "Skipped groups",
-    importWarnings: "Some configuration was not imported",
+    managedGroups: "Proxy groups",
     restore: "Restore backup",
     removeCustom: "Remove target",
-    customTarget: "Custom target",
     customName: "Target name (optional)",
     customPath: "Absolute path to chatLanguageModels.json",
     addTarget: "Add and select",
-    models: "Model catalog",
-    modelsDescription:
-      "Enabled models appear in the Copilot model picker of every selected profile.",
-    addModel: "Add model",
-    noModels: "No BYOK models configured yet.",
+    providers: "Proxy providers",
+    providersDescription:
+      "The current provider controls the actual upstream endpoint and model ID behind the fixed VS Code model.",
+    addProvider: "Add provider",
+    noProviders: "No proxy providers configured yet.",
+    current: "Current",
     enabled: "Enabled",
     disabled: "Disabled",
+    select: "Make current",
     edit: "Edit",
     delete: "Delete",
-    repairSync: "Re-sync",
-    stopManaging: "Stop managing selected profiles",
-    selectedProfiles: "Selected profiles",
-    enabledModels: "Enabled models",
+    start: "Enable and write to VS Code",
+    resync: "Rewrite fixed model",
+    stop: "Stop takeover and remove fixed model",
+    providerSaved: "Provider saved",
+    providerDeleted: "Provider deleted",
+    providerSelected: "Current provider switched",
+    targetsUpdated: "Profile selection updated",
+    started: "Copilot switch proxy enabled",
+    stopped: "Copilot switch proxy stopped",
+    restored: "Profile backup restored",
+    restoreNoop: "No backup or proxy group was available to restore",
+    targetAdded: "Custom profile added",
+    targetRemoved: "Custom profile removed",
     changedFiles: "Changed files",
-    securityTitle: "API key storage notice",
-    security:
-      "VS Code Custom Endpoint stores the API key in chatLanguageModels.json. External applications cannot populate VS Code SecretStorage, so synchronized credentials remain visible in the profile configuration file.",
-    readError: "Configuration read failed",
-    saveModelSuccess: "Model saved and synchronized",
-    deleteModelSuccess: "Model deleted and synchronized",
-    targetUpdateSuccess: "Sync targets updated and synchronized",
-    syncSuccess: "Copilot BYOK synchronized",
-    removeSuccess: "Removed CC Switch model groups from selected profiles",
-    restoreSuccess: "Configuration backup restored",
-    restoreNoop: "No backup or managed models were available to restore",
-    customAdded: "Custom target added",
-    customRemoved: "Custom target removed",
-    confirmDelete:
-      "Delete this BYOK model? Synchronized copies are removed automatically.",
+    confirmDelete: "Delete this proxy provider?",
     confirmStop:
-      "Remove all CC Switch model groups from the selected profiles? Other BYOK configuration is preserved.",
+      "Remove the fixed CC Switch model from selected profiles and stop the local proxy? Other BYOK configuration is preserved.",
   },
 } as const;
 
@@ -157,10 +162,10 @@ type BusyAction =
   | "load"
   | "targets"
   | "custom"
-  | "model"
-  | "sync"
-  | "remove"
-  | `import:${string}`
+  | "provider"
+  | "start"
+  | "stop"
+  | `select:${string}`
   | `restore:${string}`
   | `custom-remove:${string}`
   | null;
@@ -172,12 +177,12 @@ function targetTitle(target: CopilotByokTargetState, defaultLabel: string) {
   return `${edition} · ${profile}`;
 }
 
-function capabilityLabels(model: CopilotByokModel) {
+function capabilityLabels(provider: CopilotByokModel) {
   const labels: string[] = [];
-  if (model.toolCalling) labels.push("Tools");
-  if (model.vision) labels.push("Vision");
-  if (model.thinking) labels.push("Thinking");
-  if (model.streaming) labels.push("Streaming");
+  if (provider.toolCalling) labels.push("Tools");
+  if (provider.vision) labels.push("Vision");
+  if (provider.thinking) labels.push("Thinking");
+  if (provider.streaming) labels.push("Streaming");
   return labels;
 }
 
@@ -187,9 +192,8 @@ export function CopilotByokSettings() {
   const [state, setState] = useState<CopilotByokState | null>(null);
   const [busy, setBusy] = useState<BusyAction>("load");
   const [editorOpen, setEditorOpen] = useState(false);
-  const [editingModel, setEditingModel] = useState<CopilotByokModel | null>(
-    null,
-  );
+  const [editingProvider, setEditingProvider] =
+    useState<CopilotByokModel | null>(null);
   const [customName, setCustomName] = useState("");
   const [customPath, setCustomPath] = useState("");
 
@@ -201,7 +205,7 @@ export function CopilotByokSettings() {
         setState(next);
         if (showToast) toast.success(copy.refresh);
       } catch (error) {
-        console.error("[CopilotByokSettings] Failed to load", error);
+        console.error("[CopilotByokSettings] Failed to load proxy state", error);
         toast.error(String(error));
       } finally {
         setBusy(null);
@@ -218,6 +222,13 @@ export function CopilotByokSettings() {
     () => state?.targets.filter((target) => target.selected) ?? [],
     [state],
   );
+  const currentProvider = useMemo(
+    () =>
+      state?.models.find(
+        (provider) => provider.id === state.currentProviderId,
+      ) ?? null,
+    [state],
+  );
 
   const updateTargets = async (targetId: string, checked: boolean) => {
     if (!state || busy) return;
@@ -228,7 +239,7 @@ export function CopilotByokSettings() {
         : state.selectedTargetIds.filter((id) => id !== targetId);
       const next = await copilotByokApi.setTargets(nextIds);
       setState(next);
-      toast.success(copy.targetUpdateSuccess);
+      toast.success(copy.targetsUpdated);
     } catch (error) {
       toast.error(String(error));
     } finally {
@@ -247,7 +258,7 @@ export function CopilotByokSettings() {
       setState(next);
       setCustomName("");
       setCustomPath("");
-      toast.success(copy.customAdded);
+      toast.success(copy.targetAdded);
     } catch (error) {
       toast.error(String(error));
     } finally {
@@ -261,7 +272,7 @@ export function CopilotByokSettings() {
     try {
       const next = await copilotByokApi.removeCustomTarget(target.id);
       setState(next);
-      toast.success(copy.customRemoved);
+      toast.success(copy.targetRemoved);
     } catch (error) {
       toast.error(String(error));
     } finally {
@@ -269,13 +280,14 @@ export function CopilotByokSettings() {
     }
   };
 
-  const saveModel = async (model: CopilotByokModel) => {
-    setBusy("model");
+  const saveProvider = async (provider: CopilotByokModel) => {
+    setBusy("provider");
     try {
-      const next = await copilotByokApi.upsertModel(model);
+      const next = await copilotByokApi.upsertModel(provider);
       setState(next);
       setEditorOpen(false);
-      toast.success(copy.saveModelSuccess);
+      setEditingProvider(null);
+      toast.success(copy.providerSaved);
     } catch (error) {
       toast.error(String(error));
       throw error;
@@ -284,11 +296,14 @@ export function CopilotByokSettings() {
     }
   };
 
-  const toggleModel = async (model: CopilotByokModel, enabled: boolean) => {
+  const toggleProvider = async (
+    provider: CopilotByokModel,
+    enabled: boolean,
+  ) => {
     if (busy) return;
-    setBusy("model");
+    setBusy("provider");
     try {
-      const next = await copilotByokApi.upsertModel({ ...model, enabled });
+      const next = await copilotByokApi.upsertModel({ ...provider, enabled });
       setState(next);
     } catch (error) {
       toast.error(String(error));
@@ -297,13 +312,13 @@ export function CopilotByokSettings() {
     }
   };
 
-  const deleteModel = async (model: CopilotByokModel) => {
-    if (!window.confirm(copy.confirmDelete) || busy) return;
-    setBusy("model");
+  const deleteProvider = async (provider: CopilotByokModel) => {
+    if (busy || !window.confirm(copy.confirmDelete)) return;
+    setBusy("provider");
     try {
-      const next = await copilotByokApi.deleteModel(model.id);
+      const next = await copilotByokApi.deleteModel(provider.id);
       setState(next);
-      toast.success(copy.deleteModelSuccess);
+      toast.success(copy.providerDeleted);
     } catch (error) {
       toast.error(String(error));
     } finally {
@@ -311,33 +326,26 @@ export function CopilotByokSettings() {
     }
   };
 
-  const importExistingModels = async (target: CopilotByokTargetState) => {
+  const selectProvider = async (provider: CopilotByokModel) => {
+    if (busy || !provider.enabled) return;
+    setBusy(`select:${provider.id}`);
+    try {
+      await copilotByokApi.selectProvider(provider.id);
+      toast.success(copy.providerSelected);
+      await load();
+    } catch (error) {
+      toast.error(String(error));
+      setBusy(null);
+    }
+  };
+
+  const startIntegration = async () => {
     if (busy) return;
-    setBusy(`import:${target.id}`);
+    setBusy("start");
     try {
-      const result = await copilotByokApi.importModels(target.id);
+      const result = await copilotByokApi.start();
       toast.success(
-        `${copy.importSuccess}: ${result.importedModelCount} · ${copy.importedGroups}: ${result.importedGroupCount} · ${copy.reusedModels}: ${result.reusedModelCount} · ${copy.skippedGroups}: ${result.skippedGroupCount}`,
-      );
-      if (result.warnings.length > 0) {
-        toast.warning(copy.importWarnings, {
-          description: result.warnings.join("\n"),
-        });
-      }
-      await load();
-    } catch (error) {
-      toast.error(String(error));
-      setBusy(null);
-    }
-  };
-
-  const sync = async () => {
-    if (busy || selectedTargets.length === 0) return;
-    setBusy("sync");
-    try {
-      const result = await copilotByokApi.sync();
-      toast.success(
-        `${copy.syncSuccess} · ${copy.changedFiles}: ${result.changedTargetCount}`,
+        `${copy.started} · ${copy.changedFiles}: ${result.changedTargetCount}`,
       );
       await load();
     } catch (error) {
@@ -346,16 +354,13 @@ export function CopilotByokSettings() {
     }
   };
 
-  const stopManaging = async () => {
-    if (!state || busy || selectedTargets.length === 0) return;
-    if (!window.confirm(copy.confirmStop)) return;
-    setBusy("remove");
+  const stopIntegration = async () => {
+    if (!state || busy || !window.confirm(copy.confirmStop)) return;
+    setBusy("stop");
     try {
-      const result = await copilotByokApi.removeManagedModels(
-        state.selectedTargetIds,
-      );
+      const result = await copilotByokApi.stop(state.selectedTargetIds);
       toast.success(
-        `${copy.removeSuccess} · ${copy.changedFiles}: ${result.changedTargetCount}`,
+        `${copy.stopped} · ${copy.changedFiles}: ${result.changedTargetCount}`,
       );
       await load();
     } catch (error) {
@@ -369,7 +374,7 @@ export function CopilotByokSettings() {
     setBusy(`restore:${target.id}`);
     try {
       const restored = await copilotByokApi.restoreBackup(target.id);
-      toast.success(restored ? copy.restoreSuccess : copy.restoreNoop);
+      toast.success(restored ? copy.restored : copy.restoreNoop);
       await load();
     } catch (error) {
       toast.error(String(error));
@@ -390,7 +395,7 @@ export function CopilotByokSettings() {
     return (
       <Alert variant="destructive">
         <AlertCircle className="h-4 w-4" />
-        <AlertTitle>{copy.readError}</AlertTitle>
+        <AlertTitle>{copy.loading}</AlertTitle>
         <AlertDescription>
           <Button className="mt-3" variant="outline" onClick={() => load()}>
             {copy.refresh}
@@ -411,7 +416,7 @@ export function CopilotByokSettings() {
           />
           <div>
             <h3 className="text-lg font-semibold">{copy.title}</h3>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
               {copy.description}
             </p>
           </div>
@@ -429,11 +434,48 @@ export function CopilotByokSettings() {
         </Button>
       </div>
 
-      <Alert variant="destructive">
-        <ShieldAlert className="h-4 w-4" />
-        <AlertTitle>{copy.securityTitle}</AlertTitle>
-        <AlertDescription>{copy.security}</AlertDescription>
-      </Alert>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>{copy.limitationTitle}</AlertTitle>
+          <AlertDescription>{copy.limitation}</AlertDescription>
+        </Alert>
+        <Alert>
+          <ShieldCheck className="h-4 w-4" />
+          <AlertTitle>{copy.securityTitle}</AlertTitle>
+          <AlertDescription>{copy.security}</AlertDescription>
+        </Alert>
+      </div>
+
+      <Card>
+        <CardContent className="grid gap-4 pt-6 md:grid-cols-2 xl:grid-cols-4">
+          <div>
+            <p className="text-xs text-muted-foreground">Status</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Badge variant={state.integrationEnabled ? "secondary" : "outline"}>
+                {state.integrationEnabled
+                  ? copy.integrationOn
+                  : copy.integrationOff}
+              </Badge>
+              <Badge variant={state.serverRunning ? "secondary" : "outline"}>
+                {state.serverRunning
+                  ? copy.serverRunning
+                  : copy.serverStopped}
+              </Badge>
+            </div>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">{copy.fixedModel}</p>
+            <p className="mt-2 font-mono text-sm">{state.fixedModelId}</p>
+          </div>
+          <div className="md:col-span-2">
+            <p className="text-xs text-muted-foreground">{copy.localEndpoint}</p>
+            <p className="mt-2 break-all font-mono text-sm">
+              {state.proxyUrl}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-3">
@@ -488,28 +530,12 @@ export function CopilotByokSettings() {
                       </p>
                       {target.readError ? (
                         <p className="mt-2 text-xs text-destructive">
-                          {copy.readError}: {target.readError}
+                          {target.readError}
                         </p>
                       ) : null}
                     </div>
                   </div>
-
                   <div className="flex shrink-0 flex-wrap items-center gap-2">
-                    {target.configExists && !target.readError ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={Boolean(busy)}
-                        onClick={() => void importExistingModels(target)}
-                      >
-                        {busy === `import:${target.id}` ? (
-                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Download className="mr-2 h-3.5 w-3.5" />
-                        )}
-                        {copy.importExisting}
-                      </Button>
-                    ) : null}
                     <Button
                       size="sm"
                       variant="outline"
@@ -546,18 +572,22 @@ export function CopilotByokSettings() {
 
           <div className="grid gap-3 rounded-lg border border-dashed p-4 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.5fr)_auto]">
             <div className="space-y-2">
-              <Label htmlFor="copilot-custom-name">{copy.customName}</Label>
+              <Label htmlFor="copilot-proxy-target-name">
+                {copy.customName}
+              </Label>
               <Input
-                id="copilot-custom-name"
+                id="copilot-proxy-target-name"
                 value={customName}
                 onChange={(event) => setCustomName(event.target.value)}
                 disabled={Boolean(busy)}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="copilot-custom-path">{copy.customPath}</Label>
+              <Label htmlFor="copilot-proxy-target-path">
+                {copy.customPath}
+              </Label>
               <Input
-                id="copilot-custom-path"
+                id="copilot-proxy-target-path"
                 value={customPath}
                 onChange={(event) => setCustomPath(event.target.value)}
                 disabled={Boolean(busy)}
@@ -587,75 +617,102 @@ export function CopilotByokSettings() {
             <div>
               <CardTitle className="flex items-center gap-2 text-base">
                 <KeyRound className="h-4 w-4" />
-                {copy.models}
+                {copy.providers}
               </CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                {copy.modelsDescription}
+                {copy.providersDescription}
               </p>
             </div>
             <Button
               size="sm"
               onClick={() => {
-                setEditingModel(null);
+                setEditingProvider(null);
                 setEditorOpen(true);
               }}
               disabled={Boolean(busy)}
             >
               <Plus className="mr-2 h-4 w-4" />
-              {copy.addModel}
+              {copy.addProvider}
             </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
           {state.models.length === 0 ? (
             <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-              {copy.noModels}
+              {copy.noProviders}
             </p>
           ) : (
-            state.models.map((model) => {
-              const capabilities = capabilityLabels(model);
+            state.models.map((provider) => {
+              const isCurrent = provider.id === state.currentProviderId;
+              const capabilities = capabilityLabels(provider);
               return (
                 <div
-                  key={model.id}
-                  className="flex flex-col gap-3 rounded-lg border p-4 lg:flex-row lg:items-center lg:justify-between"
+                  key={provider.id}
+                  className={`flex flex-col gap-3 rounded-lg border p-4 lg:flex-row lg:items-center lg:justify-between ${
+                    isCurrent ? "border-primary/50 bg-primary/5" : ""
+                  }`}
                 >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{model.name}</span>
-                      <Badge variant={model.enabled ? "secondary" : "outline"}>
-                        {model.enabled ? copy.enabled : copy.disabled}
+                      <span className="font-medium">{provider.name}</span>
+                      {isCurrent ? (
+                        <Badge variant="secondary">
+                          <Check className="mr-1 h-3 w-3" />
+                          {copy.current}
+                        </Badge>
+                      ) : null}
+                      <Badge variant={provider.enabled ? "outline" : "secondary"}>
+                        {provider.enabled ? copy.enabled : copy.disabled}
                       </Badge>
-                      <Badge variant="outline">{model.apiType}</Badge>
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      {model.modelId}
+                      {provider.modelId}
                     </p>
                     <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-                      {model.url}
+                      {provider.endpoint}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                      <span>Context: {model.contextWindow.toLocaleString()}</span>
-                      <span>Output: {model.maxOutputTokens.toLocaleString()}</span>
+                      <span>
+                        Context: {provider.contextWindow.toLocaleString()}
+                      </span>
+                      <span>
+                        Output: {provider.maxOutputTokens.toLocaleString()}
+                      </span>
                       {capabilities.map((label) => (
                         <span key={label}>{label}</span>
                       ))}
                     </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
                     <Switch
-                      checked={model.enabled}
+                      checked={provider.enabled}
                       disabled={Boolean(busy)}
                       onCheckedChange={(checked) =>
-                        void toggleModel(model, checked)
+                        void toggleProvider(provider, checked)
                       }
-                      aria-label={`${model.name} ${copy.enabled}`}
+                      aria-label={`${provider.name} ${copy.enabled}`}
                     />
+                    {!isCurrent ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={Boolean(busy) || !provider.enabled}
+                        onClick={() => void selectProvider(provider)}
+                      >
+                        {busy === `select:${provider.id}` ? (
+                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Check className="mr-2 h-3.5 w-3.5" />
+                        )}
+                        {copy.select}
+                      </Button>
+                    ) : null}
                     <Button
                       size="sm"
                       variant="outline"
                       disabled={Boolean(busy)}
                       onClick={() => {
-                        setEditingModel(model);
+                        setEditingProvider(provider);
                         setEditorOpen(true);
                       }}
                     >
@@ -666,7 +723,7 @@ export function CopilotByokSettings() {
                       size="sm"
                       variant="ghost"
                       disabled={Boolean(busy)}
-                      onClick={() => void deleteModel(model)}
+                      onClick={() => void deleteProvider(provider)}
                     >
                       <Trash2 className="mr-2 h-3.5 w-3.5" />
                       {copy.delete}
@@ -680,51 +737,58 @@ export function CopilotByokSettings() {
       </Card>
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/20 p-4">
-        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-          <span>
-            {copy.selectedProfiles}: {selectedTargets.length}
-          </span>
-          <span>
-            {copy.enabledModels}: {state.managedModelCount}
-          </span>
+        <div className="text-sm text-muted-foreground">
+          {currentProvider ? (
+            <span>
+              {copy.current}: {currentProvider.name} / {currentProvider.modelId}
+            </span>
+          ) : (
+            <span>{copy.noProviders}</span>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
-            variant="outline"
-            onClick={() => void sync()}
-            disabled={Boolean(busy) || selectedTargets.length === 0}
+            onClick={() => void startIntegration()}
+            disabled={
+              Boolean(busy) ||
+              selectedTargets.length === 0 ||
+              !currentProvider ||
+              !currentProvider.enabled
+            }
           >
-            {busy === "sync" ? (
+            {busy === "start" ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
+            ) : state.integrationEnabled ? (
               <RefreshCw className="mr-2 h-4 w-4" />
+            ) : (
+              <Play className="mr-2 h-4 w-4" />
             )}
-            {copy.repairSync}
+            {state.integrationEnabled ? copy.resync : copy.start}
           </Button>
           <Button
             variant="destructive"
-            onClick={() => void stopManaging()}
-            disabled={Boolean(busy) || selectedTargets.length === 0}
+            onClick={() => void stopIntegration()}
+            disabled={Boolean(busy) || !state.integrationEnabled}
           >
-            {busy === "remove" ? (
+            {busy === "stop" ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : (
-              <Unplug className="mr-2 h-4 w-4" />
+              <Square className="mr-2 h-4 w-4" />
             )}
-            {copy.stopManaging}
+            {copy.stop}
           </Button>
         </div>
       </div>
 
       <CopilotByokModelDialog
         open={editorOpen}
-        model={editingModel}
-        saving={busy === "model"}
+        model={editingProvider}
+        saving={busy === "provider"}
         onOpenChange={(open) => {
           setEditorOpen(open);
-          if (!open) setEditingModel(null);
+          if (!open) setEditingProvider(null);
         }}
-        onSave={saveModel}
+        onSave={saveProvider}
       />
     </div>
   );
