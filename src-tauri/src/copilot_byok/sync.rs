@@ -91,7 +91,10 @@ fn create_backup_once(path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn write_groups(path: &Path, groups: &[Value]) -> Result<(), AppError> {
+pub(crate) fn write_language_model_groups(
+    path: &Path,
+    groups: &[Value],
+) -> Result<(), AppError> {
     ensure_regular_target(path)?;
     create_backup_once(path)?;
     crate::config::write_json_file(path, &Value::Array(groups.to_vec()))
@@ -148,7 +151,7 @@ pub fn effective_selected_target_ids(
         .unwrap_or_default()
 }
 
-fn resolve_target_paths(
+pub(crate) fn resolve_target_paths(
     store: &CopilotByokStore,
     requested_ids: &[String],
 ) -> Result<Vec<(String, PathBuf)>, AppError> {
@@ -184,7 +187,7 @@ pub fn sync_store(store: &CopilotByokStore) -> Result<CopilotByokSyncResult, App
         let existing = read_language_model_groups(path)?;
         let merged = merge_managed_groups(existing.clone(), &store.models);
         if merged != existing {
-            write_groups(path, &merged)?;
+            write_language_model_groups(path, &merged)?;
             changed_target_count += 1;
         }
     }
@@ -224,7 +227,7 @@ pub fn remove_managed_groups(
         if unmanaged.is_empty() && !backup_path(path).exists() {
             fs::remove_file(path).map_err(|error| AppError::io(path, error))?;
         } else {
-            write_groups(path, &unmanaged)?;
+            write_language_model_groups(path, &unmanaged)?;
         }
         changed_target_count += 1;
     }
