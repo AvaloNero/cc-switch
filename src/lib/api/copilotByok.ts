@@ -120,13 +120,15 @@ export const copilotByokApi = {
   },
 
   importModels(targetId: string): Promise<CopilotByokImportResult> {
-    return invoke<CopilotByokImportResult>("copilot_byok_import_models", {
+    return invoke<CopilotByokImportResult>("copilot_byok_sync", {
       targetId,
     });
   },
 
   sync(): Promise<CopilotByokSyncResult> {
-    return invoke<CopilotByokSyncResult>("copilot_byok_sync");
+    return invoke<CopilotByokSyncResult>("copilot_byok_sync", {
+      targetId: null,
+    });
   },
 
   removeManagedModels(
