@@ -159,16 +159,6 @@ pub(crate) fn discover_from_roots(
     Ok(targets)
 }
 
-pub fn find_target(
-    targets: &[VsCodeProfileTarget],
-    target_id: &str,
-) -> Option<VsCodeProfileTarget> {
-    targets
-        .iter()
-        .find(|target| target.id == target_id)
-        .cloned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
