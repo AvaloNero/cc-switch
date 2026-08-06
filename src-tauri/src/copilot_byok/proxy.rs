@@ -1,23 +1,15 @@
+mod server;
+
 use super::vscode::{self, VsCodeEdition, VsCodeProfileTarget};
 use crate::error::AppError;
-use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Json};
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
-use axum::response::Response;
-use axum::routing::post;
-use axum::Router;
-use bytes::Bytes;
-use futures::StreamExt;
-use once_cell::sync::Lazy;
+use http::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use once_cell::sync::Lazy;
 
 const STORE_FILE: &str = "copilot-byok-proxy.json";
 const STORE_VERSION: u32 = 1;
@@ -27,17 +19,8 @@ const DEFAULT_LISTEN_PORT: u16 = 15_735;
 const DEFAULT_CONTEXT_WINDOW: u64 = 262_144;
 const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 32_768;
 const MAX_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 
 static OPERATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-static SERVER_RUNTIME: Lazy<Mutex<Option<ServerRuntime>>> = Lazy::new(|| Mutex::new(None));
-static SERVER_RUNNING: AtomicBool = AtomicBool::new(false);
-
-struct ServerRuntime {
-    port: u16,
-    shutdown: oneshot::Sender<()>,
-    handle: JoinHandle<()>,
-}
 
 fn default_true() -> bool {
     true
@@ -139,7 +122,7 @@ impl CopilotByokModel {
             HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
                 AppError::InvalidInput(format!("Invalid request header name {name}: {error}"))
             })?;
-            HeaderValue::from_str(value).map_err(|error| {
+            value.parse::<HeaderValue>().map_err(|error| {
                 AppError::InvalidInput(format!("Invalid request header value for {name}: {error}"))
             })?;
 
@@ -172,13 +155,13 @@ struct CustomTarget {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Store {
+pub(super) struct Store {
     #[serde(default = "store_version")]
     version: u32,
     #[serde(default)]
-    gateway_token: String,
+    pub(super) gateway_token: String,
     #[serde(default = "default_listen_port")]
-    listen_port: u16,
+    pub(super) listen_port: u16,
     #[serde(default)]
     integration_enabled: bool,
     #[serde(default)]
@@ -301,6 +284,14 @@ fn operation_guard() -> Result<MutexGuard<'static, ()>, AppError> {
         .map_err(|error| AppError::Lock(error.to_string()))
 }
 
+fn managed_model_count(store: &Store) -> usize {
+    if current_provider(store).is_some() {
+        1
+    } else {
+        0
+    }
+}
+
 fn store_path() -> PathBuf {
     crate::config::get_app_config_dir().join(STORE_FILE)
 }
@@ -326,7 +317,7 @@ fn save_store(store: &Store) -> Result<(), AppError> {
     Ok(())
 }
 
-fn load_store() -> Result<Store, AppError> {
+pub(super) fn load_store() -> Result<Store, AppError> {
     let path = store_path();
     if !path.exists() {
         let store = Store::default();
@@ -418,7 +409,7 @@ fn is_managed_group(value: &Value) -> bool {
         && value.get("name").and_then(Value::as_str) == Some(GROUP_NAME)
 }
 
-fn current_provider(store: &Store) -> Option<&CopilotByokModel> {
+pub(super) fn current_provider(store: &Store) -> Option<&CopilotByokModel> {
     let id = store.current_provider_id.as_deref()?;
     store
         .providers
@@ -436,10 +427,7 @@ fn managed_group(store: &Store) -> Value {
         "models": [{
             "id": MODEL_ID,
             "name": "CC Switch Current",
-            "url": format!(
-                "http://127.0.0.1:{}/copilot/v1/chat/completions",
-                store.listen_port
-            ),
+            "url": server::endpoint(store.listen_port),
             "contextWindow": provider
                 .map(|provider| provider.context_window)
                 .unwrap_or(DEFAULT_CONTEXT_WINDOW),
@@ -471,10 +459,7 @@ fn target_path_map(
     paths
 }
 
-fn effective_selected_target_ids(
-    store: &Store,
-    detected: &[VsCodeProfileTarget],
-) -> Vec<String> {
+fn effective_selected_target_ids(store: &Store, detected: &[VsCodeProfileTarget]) -> Vec<String> {
     if store.targets_initialized {
         return store.selected_target_ids.clone();
     }
@@ -486,10 +471,7 @@ fn effective_selected_target_ids(
         .unwrap_or_default()
 }
 
-fn available_selected_target_ids(
-    store: &Store,
-    detected: &[VsCodeProfileTarget],
-) -> Vec<String> {
+fn available_selected_target_ids(store: &Store, detected: &[VsCodeProfileTarget]) -> Vec<String> {
     let available: HashSet<String> = detected
         .iter()
         .map(|target| target.id.clone())
@@ -499,6 +481,11 @@ fn available_selected_target_ids(
         .into_iter()
         .filter(|id| available.contains(id))
         .collect()
+}
+
+fn selected_ids_for_store(store: &Store) -> Result<Vec<String>, AppError> {
+    let detected = vscode::discover_vscode_targets()?;
+    Ok(available_selected_target_ids(store, &detected))
 }
 
 fn resolve_target_paths(
@@ -522,8 +509,7 @@ fn resolve_target_paths(
 }
 
 fn sync_vscode(store: &Store) -> Result<CopilotByokSyncResult, AppError> {
-    let detected = vscode::discover_vscode_targets()?;
-    let target_ids = available_selected_target_ids(store, &detected);
+    let target_ids = selected_ids_for_store(store)?;
     if target_ids.is_empty() {
         return Err(AppError::InvalidInput(
             "No VS Code profile is selected for Copilot proxy integration".to_string(),
@@ -549,10 +535,10 @@ fn sync_vscode(store: &Store) -> Result<CopilotByokSyncResult, AppError> {
 
     Ok(CopilotByokSyncResult {
         target_ids,
-        managed_model_count: usize::from(store.current_provider_id.is_some()),
+        managed_model_count: managed_model_count(store),
         changed_target_count,
         integration_enabled: store.integration_enabled,
-        server_running: SERVER_RUNNING.load(Ordering::SeqCst),
+        server_running: server::is_running(),
     })
 }
 
@@ -652,202 +638,22 @@ fn build_state(store: Store) -> Result<CopilotByokState, AppError> {
         selected_target_ids,
         current_provider_id: store.current_provider_id,
         integration_enabled: store.integration_enabled,
-        server_running: SERVER_RUNNING.load(Ordering::SeqCst),
+        server_running: server::is_running(),
         listen_port: store.listen_port,
-        proxy_url: format!(
-            "http://127.0.0.1:{}/copilot/v1/chat/completions",
-            store.listen_port
-        ),
+        proxy_url: server::endpoint(store.listen_port),
         fixed_model_id: MODEL_ID.to_string(),
     })
 }
 
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    value
-        .strip_prefix("Bearer ")
-        .or_else(|| value.strip_prefix("bearer "))
-}
-
-fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
-    let body = json!({
-        "error": {
-            "message": message.into(),
-            "type": "cc_switch_copilot_proxy_error"
-        }
-    });
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap_or_else(|_| Response::new(Body::from("proxy error")))
-}
-
-fn is_hop_by_hop(name: &HeaderName) -> bool {
-    matches!(
-        name.as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-            | "content-length"
-    )
-}
-
-async fn proxy_handler(headers: HeaderMap, Json(mut body): Json<Value>) -> Response {
-    let store = match load_store() {
-        Ok(store) => store,
-        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-    };
-
-    if bearer_token(&headers) != Some(store.gateway_token.as_str()) {
-        return error_response(StatusCode::UNAUTHORIZED, "Invalid CC Switch gateway token");
-    }
-
-    let Some(provider) = current_provider(&store) else {
-        return error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "No enabled Copilot proxy provider is selected",
-        );
-    };
-
-    let Some(object) = body.as_object_mut() else {
-        return error_response(StatusCode::BAD_REQUEST, "Request body must be a JSON object");
-    };
-    object.insert("model".to_string(), Value::String(provider.model_id.clone()));
-
-    let client = crate::proxy::http_client::get();
-    let mut request = client
-        .post(&provider.endpoint)
-        .bearer_auth(&provider.api_key)
-        .json(&body);
-    for (name, value) in &provider.request_headers {
-        request = request.header(name.as_str(), value.as_str());
-    }
-
-    let upstream = match request.send().await {
-        Ok(response) => response,
-        Err(error) => {
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Upstream request failed: {error}"),
-            )
-        }
-    };
-
-    let status = upstream.status();
-    let upstream_headers = upstream.headers().clone();
-    let stream = upstream
-        .bytes_stream()
-        .map(|item| item.map(Bytes::from).map_err(std::io::Error::other));
-    let mut response = Response::builder().status(status);
-    for (name, value) in &upstream_headers {
-        if !is_hop_by_hop(name) {
-            response = response.header(name, value);
-        }
-    }
-    response
-        .body(Body::from_stream(stream))
-        .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, error.to_string()))
-}
-
-async fn stop_server() -> Result<(), AppError> {
-    let runtime = {
-        let mut slot = SERVER_RUNTIME
-            .lock()
-            .map_err(|error| AppError::Lock(error.to_string()))?;
-        slot.take()
-    };
-
-    if let Some(ServerRuntime {
-        shutdown,
-        mut handle,
-        ..
-    }) = runtime
-    {
-        let _ = shutdown.send(());
-        if tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle)
-            .await
-            .is_err()
-        {
-            handle.abort();
-            let _ = handle.await;
-        }
-    }
-    SERVER_RUNNING.store(false, Ordering::SeqCst);
-    Ok(())
-}
-
-async fn ensure_server(port: u16) -> Result<(), AppError> {
-    let already_running = SERVER_RUNTIME
-        .lock()
-        .map_err(|error| AppError::Lock(error.to_string()))?
-        .as_ref()
-        .is_some_and(|runtime| runtime.port == port && SERVER_RUNNING.load(Ordering::SeqCst));
-    if already_running {
-        return Ok(());
-    }
-
-    stop_server().await?;
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
-        .await
-        .map_err(|error| {
-            AppError::Config(format!(
-                "Failed to bind Copilot proxy on 127.0.0.1:{port}: {error}"
-            ))
-        })?;
-    let (shutdown, shutdown_rx) = oneshot::channel();
-    let app = Router::new()
-        .route("/copilot/v1/chat/completions", post(proxy_handler))
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES));
-
-    SERVER_RUNNING.store(true, Ordering::SeqCst);
-    let handle = tokio::spawn(async move {
-        let result = axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await;
-        SERVER_RUNNING.store(false, Ordering::SeqCst);
-        if let Err(error) = result {
-            log::error!("Copilot BYOK proxy server stopped unexpectedly: {error}");
-        }
-    });
-
-    let mut slot = SERVER_RUNTIME
-        .lock()
-        .map_err(|error| AppError::Lock(error.to_string()))?;
-    *slot = Some(ServerRuntime {
-        port,
-        shutdown,
-        handle,
-    });
-    Ok(())
-}
-
 async fn activate_store(store: &Store) -> Result<CopilotByokSyncResult, AppError> {
-    if current_provider(store).is_none() {
-        return Err(AppError::InvalidInput(
-            "Select an enabled Copilot proxy provider first".to_string(),
-        ));
-    }
-    ensure_server(store.listen_port).await?;
+    server::activate(store).await?;
     match sync_vscode(store) {
         Ok(result) => Ok(result),
         Err(error) => {
-            let _ = stop_server().await;
+            let _ = server::stop().await;
             Err(error)
         }
     }
-}
-
-fn selected_ids_for_store(store: &Store) -> Result<Vec<String>, AppError> {
-    let detected = vscode::discover_vscode_targets()?;
-    Ok(available_selected_target_ids(store, &detected))
 }
 
 pub async fn get_state() -> Result<CopilotByokState, AppError> {
@@ -855,7 +661,6 @@ pub async fn get_state() -> Result<CopilotByokState, AppError> {
         let _guard = operation_guard()?;
         load_store()?
     };
-
     if store.integration_enabled && current_provider(&store).is_some() {
         if let Err(error) = activate_store(&store).await {
             log::warn!("Failed to restore Copilot proxy integration: {error}");
@@ -902,7 +707,7 @@ pub async fn set_targets(target_ids: Vec<String>) -> Result<CopilotByokState, Ap
     if store.integration_enabled {
         activate_store(&store).await?;
     } else {
-        stop_server().await?;
+        server::stop().await?;
     }
     build_state(store)
 }
@@ -983,7 +788,7 @@ pub async fn remove_custom_target(target_id: &str) -> Result<CopilotByokState, A
     if store.integration_enabled {
         activate_store(&store).await?;
     } else {
-        stop_server().await?;
+        server::stop().await?;
     }
     build_state(store)
 }
@@ -1017,7 +822,7 @@ pub async fn upsert_model(mut model: CopilotByokModel) -> Result<CopilotByokStat
     if store.integration_enabled {
         activate_store(&store).await?;
     } else if store.current_provider_id.is_none() {
-        stop_server().await?;
+        server::stop().await?;
     }
     build_state(store)
 }
@@ -1041,12 +846,13 @@ pub async fn delete_model(model_id: &str) -> Result<CopilotByokState, AppError> 
     if store.integration_enabled {
         activate_store(&store).await?;
     } else if store.current_provider_id.is_none() {
-        stop_server().await?;
+        server::stop().await?;
     }
     build_state(store)
 }
 
 pub async fn sync(provider_id: Option<String>) -> Result<CopilotByokSyncResult, AppError> {
+    let selecting_provider = provider_id.is_some();
     let store = {
         let _guard = operation_guard()?;
         let mut store = load_store()?;
@@ -1067,16 +873,29 @@ pub async fn sync(provider_id: Option<String>) -> Result<CopilotByokSyncResult, 
                 "Select an enabled Copilot proxy provider first".to_string(),
             ));
         }
-        if selected_ids_for_store(&store)?.is_empty() {
-            return Err(AppError::InvalidInput(
-                "Select at least one VS Code profile first".to_string(),
-            ));
+        if !selecting_provider {
+            if selected_ids_for_store(&store)?.is_empty() {
+                return Err(AppError::InvalidInput(
+                    "Select at least one VS Code profile first".to_string(),
+                ));
+            }
+            store.integration_enabled = true;
         }
-        store.integration_enabled = true;
         save_store(&store)?;
         store
     };
-    activate_store(&store).await
+
+    if store.integration_enabled {
+        activate_store(&store).await
+    } else {
+        Ok(CopilotByokSyncResult {
+            target_ids: selected_ids_for_store(&store)?,
+            managed_model_count: managed_model_count(&store),
+            changed_target_count: 0,
+            integration_enabled: false,
+            server_running: server::is_running(),
+        })
+    }
 }
 
 pub async fn remove_managed_models(
@@ -1095,10 +914,10 @@ pub async fn remove_managed_models(
         (store, target_ids, changed)
     };
 
-    stop_server().await?;
+    server::stop().await?;
     Ok(CopilotByokSyncResult {
         target_ids,
-        managed_model_count: usize::from(store.current_provider_id.is_some()),
+        managed_model_count: managed_model_count(&store),
         changed_target_count,
         integration_enabled: false,
         server_running: false,
@@ -1138,7 +957,7 @@ pub async fn restore_backup(target_id: &str) -> Result<bool, AppError> {
     if store.integration_enabled {
         activate_store(&store).await?;
     } else {
-        stop_server().await?;
+        server::stop().await?;
     }
     Ok(restored)
 }
