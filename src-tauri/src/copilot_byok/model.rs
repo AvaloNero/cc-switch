@@ -4,6 +4,12 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 pub const MANAGED_PREFIX: &str = "CC Switch:";
+const EDIT_TOOL_NAMES: [&str; 4] = [
+    "find-replace",
+    "multi-find-replace",
+    "apply-patch",
+    "code-rewrite",
+];
 
 fn default_true() -> bool {
     true
@@ -50,6 +56,10 @@ pub struct CopilotByokModel {
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u64,
     #[serde(default)]
+    pub edit_tools: Vec<String>,
+    #[serde(default)]
+    pub zero_data_retention_enabled: bool,
+    #[serde(default)]
     pub supports_reasoning_effort: Vec<String>,
     #[serde(default)]
     pub reasoning_effort_format: Option<String>,
@@ -70,6 +80,14 @@ impl CopilotByokModel {
         self.url = self.url.trim().to_string();
         self.api_key = self.api_key.trim().to_string();
         self.api_type = self.api_type.trim().to_ascii_lowercase();
+        self.edit_tools = self
+            .edit_tools
+            .iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+            .collect();
+        self.edit_tools.sort();
+        self.edit_tools.dedup();
         self.supports_reasoning_effort = self
             .supports_reasoning_effort
             .iter()
@@ -127,8 +145,19 @@ impl CopilotByokModel {
                 )));
             }
         }
+        if let Some(tool) = self
+            .edit_tools
+            .iter()
+            .find(|tool| !EDIT_TOOL_NAMES.contains(&tool.as_str()))
+        {
+            return Err(AppError::InvalidInput(format!(
+                "Unsupported Copilot BYOK edit tool: {tool}"
+            )));
+        }
         for (name, value) in &self.request_headers {
-            if name.trim().is_empty() || name.contains(['\r', '\n']) || value.contains(['\r', '\n'])
+            if name.trim().is_empty()
+                || name.contains(['\r', '\n'])
+                || value.contains(['\r', '\n'])
             {
                 return Err(AppError::InvalidInput(
                     "Copilot BYOK request headers must not contain empty names or newlines"
@@ -154,8 +183,14 @@ impl CopilotByokModel {
         if let Some(max_input_tokens) = self.max_input_tokens {
             model["maxInputTokens"] = json!(max_input_tokens);
         }
+        if !self.edit_tools.is_empty() {
+            model["editTools"] = json!(self.edit_tools);
+        }
+        if self.zero_data_retention_enabled {
+            model["zeroDataRetentionEnabled"] = json!(true);
+        }
         if !self.supports_reasoning_effort.is_empty() {
-            model["supportedReasoningEfforts"] = json!(self.supports_reasoning_effort);
+            model["supportsReasoningEffort"] = json!(self.supports_reasoning_effort);
         }
         if let Some(format) = &self.reasoning_effort_format {
             model["reasoningEffortFormat"] = json!(format);
@@ -205,6 +240,8 @@ mod tests {
             context_window: 262_144,
             max_input_tokens: None,
             max_output_tokens: 32_768,
+            edit_tools: Vec::new(),
+            zero_data_retention_enabled: false,
             supports_reasoning_effort: Vec::new(),
             reasoning_effort_format: None,
             request_headers: BTreeMap::new(),
@@ -232,10 +269,28 @@ mod tests {
     }
 
     #[test]
-    fn generated_group_has_stable_ownership_marker() {
-        let group = model().to_language_model_group();
+    fn validation_rejects_unknown_edit_tool() {
+        let mut value = model();
+        value.edit_tools = vec!["unknown-tool".to_string()];
+        assert!(value.validate().is_err());
+    }
+
+    #[test]
+    fn generated_group_uses_vscode_custom_endpoint_field_names() {
+        let mut value = model();
+        value.edit_tools = vec!["apply-patch".to_string()];
+        value.zero_data_retention_enabled = true;
+        value.supports_reasoning_effort = vec!["high".to_string()];
+        let group = value.to_language_model_group();
+
         assert_eq!(group["name"], "CC Switch: Kimi K3");
         assert_eq!(group["vendor"], "customendpoint");
         assert_eq!(group["models"][0]["id"], "kimi-k3");
+        assert_eq!(group["models"][0]["editTools"][0], "apply-patch");
+        assert_eq!(group["models"][0]["zeroDataRetentionEnabled"], true);
+        assert_eq!(group["models"][0]["supportsReasoningEffort"][0], "high");
+        assert!(group["models"][0]
+            .get("supportedReasoningEfforts")
+            .is_none());
     }
 }
