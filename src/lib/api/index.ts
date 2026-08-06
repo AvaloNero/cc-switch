@@ -26,12 +26,7 @@ export type {
   GitHubAccount,
 } from "./copilot";
 export type {
-  CopilotByokApiType,
-  CopilotByokEditTool,
-  CopilotByokImportResult,
   CopilotByokModel,
-  CopilotByokReasoningEffortFormat,
-  CopilotByokSecurityNotice,
   CopilotByokState,
   CopilotByokSyncResult,
   CopilotByokTargetState,
