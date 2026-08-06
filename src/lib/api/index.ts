@@ -28,6 +28,7 @@ export type {
 export type {
   CopilotByokApiType,
   CopilotByokEditTool,
+  CopilotByokImportResult,
   CopilotByokModel,
   CopilotByokReasoningEffortFormat,
   CopilotByokSecurityNotice,
