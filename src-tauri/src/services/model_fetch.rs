@@ -4,9 +4,10 @@
 //! 主要面向第三方聚合站（硅基流动、OpenRouter 等），以及把 Anthropic
 //! 协议挂在兼容子路径上的官方供应商（DeepSeek、Kimi、智谱 GLM 等）。
 
-use reqwest::header::{HeaderValue, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// 获取到的模型信息
@@ -15,6 +16,8 @@ use std::time::Duration;
 pub struct FetchedModel {
     pub id: String,
     pub owned_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// OpenAI 兼容的 /v1/models 响应格式
@@ -27,9 +30,14 @@ struct ModelsResponse {
 struct ModelEntry {
     id: String,
     owned_by: Option<String>,
+    #[serde(default, alias = "display_name", alias = "displayName")]
+    name: Option<String>,
 }
 
 const FETCH_TIMEOUT_SECS: u64 = 15;
+const MAX_MODELS_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_FETCHED_MODELS: usize = 10_000;
 
 /// 404/405 响应体截断长度：避免把几十 KB HTML 404 页整页保留到错误串里。
 const ERROR_BODY_MAX_CHARS: usize = 512;
@@ -57,10 +65,10 @@ pub async fn fetch_models(
     is_full_url: bool,
     models_url_override: Option<&str>,
     user_agent: Option<HeaderValue>,
+    api_type: Option<&str>,
+    request_headers: Option<&BTreeMap<String, String>>,
 ) -> Result<Vec<FetchedModel>, String> {
-    if api_key.is_empty() {
-        return Err("API Key is required to fetch models".to_string());
-    }
+    let headers = build_request_headers(api_key, api_type, request_headers)?;
 
     let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)?;
     let client = crate::proxy::http_client::get();
@@ -74,7 +82,7 @@ pub async fn fetch_models(
         );
         let mut request = client
             .get(url)
-            .header("Authorization", format!("Bearer {api_key}"))
+            .headers(headers.clone())
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS));
         // 自定义 User-Agent：部分 /models 端点同样有 UA 白名单（如 Kimi Coding Plan），
         // 与转发 / 检测路径共用同一 UA，避免"代理可用但取模型失败"。
@@ -91,18 +99,22 @@ pub async fn fetch_models(
         let status = response.status();
 
         if status.is_success() {
-            let resp: ModelsResponse = response
-                .json()
-                .await
+            let body = read_response_body_limited(response, MAX_MODELS_RESPONSE_BYTES).await?;
+            let resp: ModelsResponse = serde_json::from_slice(&body)
                 .map_err(|e| format!("Failed to parse response: {e}"))?;
+            let entries = resp.data.unwrap_or_default();
+            if entries.len() > MAX_FETCHED_MODELS {
+                return Err(format!(
+                    "Models response contains more than {MAX_FETCHED_MODELS} entries"
+                ));
+            }
 
-            let mut models: Vec<FetchedModel> = resp
-                .data
-                .unwrap_or_default()
+            let mut models: Vec<FetchedModel> = entries
                 .into_iter()
                 .map(|m| FetchedModel {
                     id: m.id,
                     owned_by: m.owned_by,
+                    name: m.name,
                 })
                 .collect();
 
@@ -111,12 +123,12 @@ pub async fn fetch_models(
         }
 
         if status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED {
-            let body = truncate_body(response.text().await.unwrap_or_default());
+            let body = read_error_body(response).await;
             last_err = Some(format!("HTTP {status}: {body}"));
             continue;
         }
 
-        let body = truncate_body(response.text().await.unwrap_or_default());
+        let body = read_error_body(response).await;
         return Err(format!("HTTP {status}: {body}"));
     }
 
@@ -124,6 +136,91 @@ pub async fn fetch_models(
         "All candidates failed: {}",
         last_err.unwrap_or_else(|| "no candidates".to_string())
     ))
+}
+
+async fn read_response_body_limited(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(format!(
+            "Response body exceeds the {max_bytes}-byte safety limit"
+        ));
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("Failed to read response: {error}"))?
+    {
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(format!(
+                "Response body exceeds the {max_bytes}-byte safety limit"
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+async fn read_error_body(response: reqwest::Response) -> String {
+    match read_response_body_limited(response, MAX_ERROR_RESPONSE_BYTES).await {
+        Ok(body) => truncate_body(String::from_utf8_lossy(&body).into_owned()),
+        Err(error) => error,
+    }
+}
+
+fn build_request_headers(
+    api_key: &str,
+    api_type: Option<&str>,
+    request_headers: Option<&BTreeMap<String, String>>,
+) -> Result<HeaderMap, String> {
+    let mut headers = HeaderMap::new();
+    for (raw_name, raw_value) in request_headers.into_iter().flatten() {
+        let name = HeaderName::from_bytes(raw_name.trim().as_bytes())
+            .map_err(|error| format!("Invalid request header name: {error}"))?;
+        let value = HeaderValue::from_str(&raw_value.replace("${apiKey}", api_key))
+            .map_err(|error| format!("Invalid request header value for {raw_name}: {error}"))?;
+        headers.insert(name, value);
+    }
+
+    let has_explicit_auth = headers.keys().any(|name| {
+        matches!(
+            name.as_str().to_ascii_lowercase().as_str(),
+            "authorization"
+                | "proxy-authorization"
+                | "api-key"
+                | "x-api-key"
+                | "anthropic-api-key"
+                | "x-goog-api-key"
+        )
+    });
+    if !api_key.is_empty() && !has_explicit_auth {
+        if api_type == Some("messages") {
+            headers.insert(
+                HeaderName::from_static("x-api-key"),
+                HeaderValue::from_str(api_key)
+                    .map_err(|error| format!("Invalid API key header value: {error}"))?,
+            );
+        } else {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {api_key}"))
+                    .map_err(|error| format!("Invalid authorization header value: {error}"))?,
+            );
+        }
+    }
+    if api_type == Some("messages") && !headers.contains_key("anthropic-version") {
+        headers.insert(
+            HeaderName::from_static("anthropic-version"),
+            HeaderValue::from_static("2023-06-01"),
+        );
+    }
+    Ok(headers)
 }
 
 /// 构造「模型列表端点」的候选 URL 列表
@@ -160,8 +257,10 @@ pub fn build_models_url_candidates(
             candidates.push(format!("{}/v1/models", &trimmed[..idx]));
         } else if let Some(idx) = trimmed.rfind('/') {
             let root = &trimmed[..idx];
-            if root.contains("://") && root.len() > root.find("://").unwrap() + 3 {
-                candidates.push(format!("{root}/v1/models"));
+            if let Some(scheme_idx) = root.find("://") {
+                if root.len() > scheme_idx + 3 {
+                    candidates.push(format!("{root}/v1/models"));
+                }
             }
         }
         if candidates.is_empty() {
@@ -238,6 +337,27 @@ fn ends_with_version_segment(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messages_protocol_uses_x_api_key_for_model_fetch() {
+        let headers = build_request_headers("secret", Some("messages"), None).unwrap();
+        assert_eq!(headers.get("x-api-key").unwrap(), "secret");
+        assert_eq!(headers.get("anthropic-version").unwrap(), "2023-06-01");
+        assert!(headers.get(AUTHORIZATION).is_none());
+    }
+
+    #[test]
+    fn explicit_auth_header_is_preserved_and_expands_api_key() {
+        let custom = BTreeMap::from([("Authorization".to_string(), "Token ${apiKey}".to_string())]);
+        let headers = build_request_headers("secret", Some("responses"), Some(&custom)).unwrap();
+        assert_eq!(headers.get(AUTHORIZATION).unwrap(), "Token secret");
+    }
+
+    #[test]
+    fn unauthenticated_model_endpoints_are_supported() {
+        let headers = build_request_headers("", Some("responses"), None).unwrap();
+        assert!(headers.is_empty());
+    }
 
     #[test]
     fn test_candidates_plain_root() {

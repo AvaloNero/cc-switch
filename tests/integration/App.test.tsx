@@ -17,6 +17,9 @@ const skillsPanelMocks = vi.hoisted(() => ({
   checkUpdates: vi.fn(),
   openDiscovery: vi.fn(),
 }));
+const copilotByokMocks = vi.hoisted(() => ({
+  openAdd: vi.fn(),
+}));
 
 vi.mock("sonner", () => ({
   toast: {
@@ -122,12 +125,44 @@ vi.mock("@/components/ConfirmDialog", () => ({
 }));
 
 vi.mock("@/components/AppSwitcher", () => ({
-  AppSwitcher: ({ activeApp, onSwitch }: any) => (
+  AppSwitcher: ({ activeApp, copilotActive, onSwitch, onOpenCopilot }: any) => (
     <div data-testid="app-switcher">
       <span>{activeApp}</span>
+      <span data-testid="copilot-active">{String(copilotActive)}</span>
       <button onClick={() => onSwitch("claude")}>switch-claude</button>
       <button onClick={() => onSwitch("codex")}>switch-codex</button>
       <button onClick={() => onSwitch("openclaw")}>switch-openclaw</button>
+      <button onClick={onOpenCopilot}>open-copilot</button>
+    </div>
+  ),
+}));
+
+vi.mock("@/components/settings/CopilotByokSettings", async () => {
+  const React = await import("react");
+  const MockCopilotByokSettings = React.forwardRef((props: any, ref) => {
+    React.useImperativeHandle(ref, () => ({
+      openAdd: copilotByokMocks.openAdd,
+    }));
+    return (
+      <div
+        data-testid="copilot-byok-settings"
+        data-catalog-only={String(props.catalogOnly === true)}
+      />
+    );
+  });
+  MockCopilotByokSettings.displayName = "MockCopilotByokSettings";
+  return { CopilotByokSettings: MockCopilotByokSettings };
+});
+
+vi.mock("@/components/settings/SettingsPage", () => ({
+  SettingsPage: ({ defaultTab, usageDefaultFilter, onOpenChange }: any) => (
+    <div
+      data-testid="settings-page"
+      data-default-tab={defaultTab}
+      data-usage-app={usageDefaultFilter?.appType}
+      data-usage-provider={usageDefaultFilter?.providerName}
+    >
+      <button onClick={() => onOpenChange(false)}>close-settings</button>
     </div>
   ),
 }));
@@ -193,8 +228,65 @@ describe("App integration with MSW", () => {
     toastErrorMock.mockReset();
     skillsPanelMocks.checkUpdates.mockReset();
     skillsPanelMocks.openDiscovery.mockReset();
+    copilotByokMocks.openAdd.mockReset();
     localStorage.removeItem("cc-switch-last-view");
   });
+
+  it("opens VS Code Copilot as a primary page from the app switcher", async () => {
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    fireEvent.click(await screen.findByText("switch-openclaw"));
+    fireEvent.click(await screen.findByText("open-copilot"));
+
+    expect(
+      await screen.findByTestId("copilot-byok-settings"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("copilot-byok-settings")).toHaveAttribute(
+      "data-catalog-only",
+      "true",
+    );
+    expect(screen.getByTestId("copilot-active")).toHaveTextContent("true");
+    expect(screen.getByTestId("app-switcher")).toBeInTheDocument();
+    expect(document.querySelector('button[title="使用统计"]')).not.toBeNull();
+    for (const title of [
+      "skills.manage",
+      "prompts.manage",
+      "sessionManager.title",
+      "mcp.title",
+    ]) {
+      expect(document.querySelector(`button[title="${title}"]`)).toBeNull();
+    }
+
+    const addByok = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="provider.addNewProvider"]',
+    );
+    expect(addByok).not.toBeNull();
+    fireEvent.click(addByok!);
+    expect(copilotByokMocks.openAdd).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('button[title="使用统计"]')!,
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("copilot-byok-settings"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("settings-page")).toHaveAttribute(
+      "data-default-tab",
+      "usage",
+    );
+    expect(screen.getByTestId("settings-page")).toHaveAttribute(
+      "data-usage-app",
+      "copilot-byok",
+    );
+
+    fireEvent.click(screen.getByText("close-settings"));
+    expect(
+      await screen.findByTestId("copilot-byok-settings"),
+    ).toBeInTheDocument();
+  }, 10_000);
 
   it("covers basic provider flows via real hooks", async () => {
     const { default: App } = await import("@/App");

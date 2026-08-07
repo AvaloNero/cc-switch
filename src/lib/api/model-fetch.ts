@@ -5,6 +5,7 @@ import { toast } from "sonner";
 export interface FetchedModel {
   id: string;
   ownedBy: string | null;
+  name?: string | null;
 }
 
 /**
@@ -19,6 +20,8 @@ export async function fetchModelsForConfig(
   isFullUrl?: boolean,
   modelsUrl?: string,
   customUserAgent?: string,
+  apiType?: "chat-completions" | "responses" | "messages",
+  requestHeaders?: Record<string, string>,
 ): Promise<FetchedModel[]> {
   return invoke("fetch_models_for_config", {
     baseUrl,
@@ -26,6 +29,8 @@ export async function fetchModelsForConfig(
     isFullUrl,
     modelsUrl,
     customUserAgent,
+    apiType,
+    requestHeaders,
   });
 }
 

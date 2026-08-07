@@ -216,6 +216,7 @@ fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
          WHEN '_gemini_session' THEN 'Gemini (Session)' \
          WHEN '_opencode_session' THEN 'OpenCode (Session)' \
          WHEN '_grok_session' THEN 'Grok Build (Session)' \
+         WHEN 'vscode-copilot' THEN 'VSCode Copilot' \
          ELSE {log_alias}.provider_id END)"
     )
 }
@@ -309,32 +310,38 @@ pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
         dedup_app_type_match_sql("proxy_dedup.app_type", &format!("{log_alias}.app_type"));
     format!(
         "NOT (
-            {data_source} IN ('session_log', 'codex_session', 'gemini_session', 'opencode_session')
-            AND EXISTS (
-                SELECT 1
-                FROM proxy_request_logs proxy_dedup
-                WHERE {proxy_data_source} = 'proxy'
-                  AND {app_type_match}
-                  AND proxy_dedup.status_code >= 200
-                  AND proxy_dedup.status_code < 300
-                  AND proxy_dedup.input_tokens = {log_alias}.input_tokens
-                  AND proxy_dedup.output_tokens = {log_alias}.output_tokens
-                  AND proxy_dedup.cache_read_tokens = {log_alias}.cache_read_tokens
-                  AND (
-                      proxy_dedup.cache_creation_tokens = {log_alias}.cache_creation_tokens
-                      OR (
-                          {log_alias}.cache_creation_tokens = 0
-                          AND {data_source} IN ('codex_session', 'gemini_session', 'opencode_session')
+            (
+                {data_source} IN ('session_log', 'codex_session', 'gemini_session', 'opencode_session')
+                AND EXISTS (
+                    SELECT 1
+                    FROM proxy_request_logs proxy_dedup
+                    WHERE {proxy_data_source} = 'proxy'
+                      AND {app_type_match}
+                      AND proxy_dedup.status_code >= 200
+                      AND proxy_dedup.status_code < 300
+                      AND proxy_dedup.input_tokens = {log_alias}.input_tokens
+                      AND proxy_dedup.output_tokens = {log_alias}.output_tokens
+                      AND proxy_dedup.cache_read_tokens = {log_alias}.cache_read_tokens
+                      AND (
+                          proxy_dedup.cache_creation_tokens = {log_alias}.cache_creation_tokens
+                          OR (
+                              {log_alias}.cache_creation_tokens = 0
+                              AND {data_source} IN ('codex_session', 'gemini_session', 'opencode_session')
+                          )
                       )
-                  )
-                  AND proxy_dedup.created_at BETWEEN
-                      {log_alias}.created_at - {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-                      AND {log_alias}.created_at + {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-                  AND (
-                      LOWER(proxy_dedup.model) = LOWER({log_alias}.model)
-                      OR LOWER(proxy_dedup.model) = 'unknown'
-                      OR LOWER({log_alias}.model) = 'unknown'
-                  )
+                      AND proxy_dedup.created_at BETWEEN
+                          {log_alias}.created_at - {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
+                          AND {log_alias}.created_at + {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
+                      AND (
+                          LOWER(proxy_dedup.model) = LOWER({log_alias}.model)
+                          OR LOWER(proxy_dedup.model) = 'unknown'
+                          OR LOWER({log_alias}.model) = 'unknown'
+                      )
+                )
+            )
+            OR (
+                {log_alias}.app_type = 'copilot-byok'
+                AND {data_source} != 'vscode_session'
             )
         )"
     )
@@ -1886,10 +1893,6 @@ impl Database {
             return Ok(false);
         }
 
-        let pricing = match Self::get_log_model_pricing_cached(conn, pricing_cache, log)? {
-            Some(info) => info,
-            None => return Ok(false),
-        };
         let multiplier =
             rust_decimal::Decimal::from_str(&log.cost_multiplier).unwrap_or_else(|e| {
                 log::warn!(
@@ -1899,6 +1902,18 @@ impl Database {
                 );
                 rust_decimal::Decimal::ONE
             });
+        // A zero multiplier is an explicit free/subscription row, not a
+        // missing-cost row. VS Code Copilot session history uses this marker
+        // so retail API pricing is never presented as an account charge for
+        // official Copilot traffic.
+        if multiplier <= rust_decimal::Decimal::ZERO {
+            return Ok(false);
+        }
+
+        let pricing = match Self::get_log_model_pricing_cached(conn, pricing_cache, log)? {
+            Some(info) => info,
+            None => return Ok(false),
+        };
 
         let million = rust_decimal::Decimal::from(1_000_000u64);
 
@@ -2661,6 +2676,49 @@ mod tests {
         assert_eq!(input_cost, "5.000000");
         assert_eq!(output_cost, "30.000000");
         assert_eq!(total_cost, "35.000000");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_backfill_skips_explicit_zero_multiplier_subscription_rows() -> Result<(), AppError> {
+        let db = Database::memory()?;
+
+        {
+            let conn = lock_conn!(db.conn);
+            insert_usage_log(
+                &conn,
+                "vscode-copilot-subscription",
+                "copilot-byok",
+                "vscode-copilot",
+                "gpt-5.5",
+                "vscode_session",
+                1000,
+                1_000_000,
+                1_000_000,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+            conn.execute(
+                "UPDATE proxy_request_logs
+                 SET request_model = 'copilot/auto', cost_multiplier = '0'
+                 WHERE request_id = 'vscode-copilot-subscription'",
+                [],
+            )?;
+        }
+
+        assert_eq!(db.backfill_missing_usage_costs()?, 0);
+
+        let conn = lock_conn!(db.conn);
+        let total_cost: String = conn.query_row(
+            "SELECT total_cost_usd FROM proxy_request_logs
+             WHERE request_id = 'vscode-copilot-subscription'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(total_cost, "0");
 
         Ok(())
     }
@@ -3610,6 +3668,87 @@ mod tests {
         assert_eq!(codex_session_count, Some(1));
         assert_eq!(gemini_session_count, None);
         assert_eq!(session_log_count, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_copilot_byok_usage_always_comes_from_vscode_session_history() -> Result<(), AppError> {
+        let db = Database::memory()?;
+
+        {
+            let conn = lock_conn!(db.conn);
+            insert_usage_log(
+                &conn,
+                "copilot-byok-proxy-match",
+                "copilot-byok",
+                "vscode-copilot",
+                "gpt-test",
+                "proxy",
+                10_000,
+                111,
+                22,
+                0,
+                0,
+                200,
+                "0.10",
+            )?;
+            insert_usage_log(
+                &conn,
+                "copilot-byok-proxy-only",
+                "copilot-byok",
+                "acme",
+                "other-model",
+                "proxy",
+                20_000,
+                999,
+                99,
+                0,
+                0,
+                200,
+                "0.90",
+            )?;
+            insert_usage_log(
+                &conn,
+                "copilot-byok-session",
+                "copilot-byok",
+                "vscode-copilot",
+                "gpt-test",
+                "vscode_session",
+                10_060,
+                111,
+                22,
+                0,
+                0,
+                200,
+                "0.10",
+            )?;
+        }
+
+        let summary = db.get_usage_summary(None, None, Some("copilot-byok"), None, None)?;
+        assert_eq!(summary.total_requests, 1);
+        assert_eq!(summary.total_input_tokens, 111);
+        assert_eq!(summary.total_output_tokens, 22);
+
+        let provider_stats = db.get_provider_stats(None, None, Some("copilot-byok"), None, None)?;
+        assert_eq!(provider_stats.len(), 1);
+        assert_eq!(provider_stats[0].provider_name, "VSCode Copilot");
+
+        let breakdown = crate::services::session_usage::get_data_source_breakdown(&db)?;
+        assert_eq!(
+            breakdown
+                .iter()
+                .find(|item| item.data_source == "vscode_session")
+                .map(|item| item.request_count),
+            Some(1)
+        );
+        assert_eq!(
+            breakdown
+                .iter()
+                .find(|item| item.data_source == "proxy")
+                .map(|item| item.request_count),
+            None
+        );
 
         Ok(())
     }

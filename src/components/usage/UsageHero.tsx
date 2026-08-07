@@ -6,6 +6,7 @@ import { useUsageSummaryByApp } from "@/lib/query/usage";
 import { cn } from "@/lib/utils";
 import { APP_ICON_MAP } from "@/config/appConfig";
 import type { AppId } from "@/lib/api/types";
+import copilotByokIcon from "@/assets/icons/vscode-copilot-byok.png";
 import {
   Activity,
   ArrowDownToLine,
@@ -68,6 +69,10 @@ const TITLE_THEMES: Record<AppType | "all", TitleTheme> = {
   opencode: {
     accent: "text-purple-600 dark:text-purple-400",
     iconBg: "bg-purple-500/10",
+  },
+  "copilot-byok": {
+    accent: "text-blue-600 dark:text-blue-400",
+    iconBg: "bg-blue-500/10",
   },
 };
 
@@ -153,6 +158,11 @@ function AppGlyph({
   appType?: string;
   accentClass: string;
 }) {
+  if (appType === "copilot-byok") {
+    return (
+      <img src={copilotByokIcon} alt="" className="h-5 w-5 object-contain" />
+    );
+  }
   if (appType && appType in APP_ICON_MAP) {
     const base = APP_ICON_MAP[appType as AppId].icon;
     if (isValidElement<{ size?: number }>(base)) {

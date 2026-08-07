@@ -65,6 +65,10 @@ import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SettingsPage } from "@/components/settings/SettingsPage";
+import {
+  CopilotByokSettings,
+  type CopilotByokSettingsHandle,
+} from "@/components/settings/CopilotByokSettings";
 import { UpdateBadge } from "@/components/UpdateBadge";
 import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
@@ -88,6 +92,7 @@ import { UniversalProviderPanel } from "@/components/universal";
 import { McpIcon } from "@/components/BrandIcons";
 import { Button } from "@/components/ui/button";
 import { SessionManagerPage } from "@/components/sessions/SessionManagerPage";
+import type { UsageDefaultFilter } from "@/components/usage/UsageDashboard";
 import {
   useDisableCurrentOmo,
   useDisableCurrentOmoSlim,
@@ -101,6 +106,7 @@ import HermesMemoryPanel from "@/components/hermes/HermesMemoryPanel";
 
 type View =
   | "providers"
+  | "copilotByok"
   | "settings"
   | "prompts"
   | "skills"
@@ -147,6 +153,7 @@ const getInitialApp = (): AppId => {
 const VIEW_STORAGE_KEY = "cc-switch-last-view";
 const VALID_VIEWS: View[] = [
   "providers",
+  "copilotByok",
   "settings",
   "prompts",
   "skills",
@@ -175,12 +182,21 @@ function App() {
   const queryClient = useQueryClient();
 
   const [activeApp, setActiveApp] = useState<AppId>(getInitialApp);
-  const sharedFeatureApp: AppId =
-    activeApp === "claude-desktop" ? "claude" : activeApp;
   const [currentView, setCurrentView] = useState<View>(getInitialView);
+  const lastPrimaryViewRef = useRef<"providers" | "copilotByok">(
+    currentView === "copilotByok" ? "copilotByok" : "providers",
+  );
+  const primaryToolbarApp: AppId = activeApp;
+  const sharedFeatureApp: AppId =
+    primaryToolbarApp === "claude-desktop" ? "claude" : primaryToolbarApp;
+  const isPrimaryView =
+    currentView === "providers" || currentView === "copilotByok";
   const [skillsDiscoverySource, setSkillsDiscoverySource] =
     useState<SkillsPageSource>("repos");
   const [settingsDefaultTab, setSettingsDefaultTab] = useState("general");
+  const [usageDefaultFilter, setUsageDefaultFilter] = useState<
+    UsageDefaultFilter | undefined
+  >();
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [mcpManagementBusy, setMcpManagementBusy] = useState(false);
@@ -196,6 +212,9 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem(VIEW_STORAGE_KEY, currentView);
+    if (currentView === "providers" || currentView === "copilotByok") {
+      lastPrimaryViewRef.current = currentView;
+    }
   }, [currentView]);
 
   const { data: settingsData } = useSettingsQuery();
@@ -212,9 +231,10 @@ function App() {
     opencode: true,
     openclaw: true,
     hermes: true,
+    copilotByok: true,
   };
 
-  const getFirstVisibleApp = (): AppId => {
+  const getFirstVisibleApp = (): AppId | null => {
     if (visibleApps.claude) return "claude";
     if (visibleApps["claude-desktop"]) return "claude-desktop";
     if (visibleApps.codex) return "codex";
@@ -223,14 +243,23 @@ function App() {
     if (visibleApps.opencode) return "opencode";
     if (visibleApps.openclaw) return "openclaw";
     if (visibleApps.hermes) return "hermes";
-    return "claude"; // fallback
+    return null;
   };
 
   useEffect(() => {
-    if (!visibleApps[activeApp]) {
-      setActiveApp(getFirstVisibleApp());
+    const firstVisibleApp = getFirstVisibleApp();
+    if (currentView === "copilotByok" && !visibleApps.copilotByok) {
+      setActiveApp(firstVisibleApp ?? "claude");
+      setCurrentView("providers");
+      return;
     }
-  }, [visibleApps, activeApp]);
+    if (currentView !== "providers" || visibleApps[activeApp]) return;
+    if (firstVisibleApp) {
+      setActiveApp(firstVisibleApp);
+    } else if (visibleApps.copilotByok) {
+      setCurrentView("copilotByok");
+    }
+  }, [visibleApps, activeApp, currentView]);
 
   // Fallback from sessions view when switching to an app without session support
   useEffect(() => {
@@ -266,6 +295,7 @@ function App() {
   const mcpPanelRef = useRef<any>(null);
   const skillsPageRef = useRef<any>(null);
   const unifiedSkillsPanelRef = useRef<any>(null);
+  const copilotByokRef = useRef<CopilotByokSettingsHandle>(null);
   // 订阅未管理 Skill 的共享缓存（实际扫描由 UnifiedSkillsPanel 进入页面时触发）。
   // 这里 enabled 默认 false，仅用于「导入」按钮的绿点提示，不主动发起扫描。
   const { data: unmanagedSkills } = useScanUnmanagedSkills();
@@ -636,7 +666,13 @@ function App() {
       if (isTextEditableTarget(event.target)) return;
 
       event.preventDefault();
-      setCurrentView(view === "skillsDiscovery" ? "skills" : "providers");
+      setCurrentView(
+        view === "skillsDiscovery"
+          ? "skills"
+          : view === "settings"
+            ? lastPrimaryViewRef.current
+            : "providers",
+      );
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -915,13 +951,35 @@ function App() {
   const renderContent = () => {
     const content = (() => {
       switch (currentView) {
+        case "copilotByok":
+          return (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden px-1 pb-12">
+                <CopilotByokSettings
+                  ref={copilotByokRef}
+                  catalogOnly
+                  onOpenWebsite={handleOpenWebsite}
+                  onOpenUsage={() => {
+                    setUsageDefaultFilter({
+                      appType: "copilot-byok",
+                      providerName: "VSCode Copilot",
+                      revision: Date.now(),
+                    });
+                    setSettingsDefaultTab("usage");
+                    setCurrentView("settings");
+                  }}
+                />
+              </div>
+            </div>
+          );
         case "settings":
           return (
             <SettingsPage
               open={true}
-              onOpenChange={() => setCurrentView("providers")}
+              onOpenChange={() => setCurrentView(lastPrimaryViewRef.current)}
               onImportSuccess={handleImportSuccess}
               defaultTab={settingsDefaultTab}
+              usageDefaultFilter={usageDefaultFilter}
             />
           );
         case "prompts":
@@ -1179,7 +1237,7 @@ function App() {
             className="flex items-center gap-1"
             style={{ WebkitAppRegion: "no-drag" } as any}
           >
-            {currentView !== "providers" ? (
+            {!isPrimaryView ? (
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
@@ -1262,6 +1320,10 @@ function App() {
                     variant="ghost"
                     size="icon"
                     onClick={() => {
+                      setUsageDefaultFilter({
+                        appType: "all",
+                        revision: Date.now(),
+                      });
                       setSettingsDefaultTab("usage");
                       setCurrentView("settings");
                     }}
@@ -1311,10 +1373,15 @@ function App() {
             {/* 弹性中段：空间不足时由 AppSwitcher 自行收纳溢出应用；
                 justify-end + overflow-hidden 只裁剪 resize 瞬间的过渡帧 */}
             <div className="flex flex-1 min-w-0 items-center justify-end overflow-hidden py-4">
-              {currentView === "providers" && (
+              {isPrimaryView && (
                 <AppSwitcher
                   activeApp={activeApp}
-                  onSwitch={setActiveApp}
+                  copilotActive={currentView === "copilotByok"}
+                  onSwitch={(app) => {
+                    setActiveApp(app);
+                    setCurrentView("providers");
+                  }}
+                  onOpenCopilot={() => setCurrentView("copilotByok")}
                   visibleApps={visibleApps}
                 />
               )}
@@ -1467,19 +1534,22 @@ function App() {
                     )}
                   </>
                 )}
-                {currentView === "providers" && (
+                {(currentView === "providers" ||
+                  currentView === "copilotByok") && (
                   <>
                     <div className="flex items-center gap-1 p-1 bg-muted rounded-xl">
                       <AnimatePresence mode="wait">
                         <motion.div
                           key={
-                            activeApp === "openclaw"
-                              ? "openclaw"
-                              : activeApp === "hermes"
-                                ? "hermes"
-                                : activeApp === "grokbuild"
-                                  ? "grokbuild"
-                                  : "default"
+                            currentView === "copilotByok"
+                              ? "copilot"
+                              : primaryToolbarApp === "openclaw"
+                                ? "openclaw"
+                                : primaryToolbarApp === "hermes"
+                                  ? "hermes"
+                                  : primaryToolbarApp === "grokbuild"
+                                    ? "grokbuild"
+                                    : "default"
                           }
                           className="flex items-center gap-1"
                           initial={{ opacity: 0 }}
@@ -1487,7 +1557,26 @@ function App() {
                           exit={{ opacity: 0 }}
                           transition={{ duration: 0.15 }}
                         >
-                          {activeApp === "hermes" ? (
+                          {currentView === "copilotByok" ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setUsageDefaultFilter({
+                                  appType: "copilot-byok",
+                                  revision: Date.now(),
+                                });
+                                setSettingsDefaultTab("usage");
+                                setCurrentView("settings");
+                              }}
+                              className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
+                              title={t("usage.title", {
+                                defaultValue: "使用统计",
+                              })}
+                            >
+                              <BarChart2 className="w-4 h-4" />
+                            </Button>
+                          ) : primaryToolbarApp === "hermes" ? (
                             <>
                               <Button
                                 variant="ghost"
@@ -1526,7 +1615,7 @@ function App() {
                                 <McpIcon size={16} />
                               </Button>
                             </>
-                          ) : activeApp === "openclaw" ? (
+                          ) : primaryToolbarApp === "openclaw" ? (
                             <>
                               <Button
                                 variant="ghost"
@@ -1579,7 +1668,9 @@ function App() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setCurrentView("skills")}
+                                onClick={() => {
+                                  setCurrentView("skills");
+                                }}
                                 className={cn(
                                   "text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5",
                                   "transition-all duration-200 ease-in-out overflow-hidden",
@@ -1594,7 +1685,9 @@ function App() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setCurrentView("prompts")}
+                                onClick={() => {
+                                  setCurrentView("prompts");
+                                }}
                                 className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
                                 title={t("prompts.manage")}
                               >
@@ -1603,7 +1696,9 @@ function App() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setCurrentView("sessions")}
+                                onClick={() => {
+                                  setCurrentView("sessions");
+                                }}
                                 className={cn(
                                   "text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5",
                                   "transition-all duration-200 ease-in-out overflow-hidden",
@@ -1618,7 +1713,9 @@ function App() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setCurrentView("mcp")}
+                                onClick={() => {
+                                  setCurrentView("mcp");
+                                }}
                                 className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
                                 title={t("mcp.title")}
                               >
@@ -1631,8 +1728,16 @@ function App() {
                     </div>
 
                     <Button
-                      onClick={() => setIsAddOpen(true)}
+                      onClick={() => {
+                        if (currentView === "copilotByok") {
+                          copilotByokRef.current?.openAdd();
+                        } else {
+                          setIsAddOpen(true);
+                        }
+                      }}
                       size="icon"
+                      aria-label={t("provider.addNewProvider")}
+                      title={t("provider.addNewProvider")}
                       className={`ml-2 ${addActionButtonClass}`}
                     >
                       <Plus className="w-5 h-5" />

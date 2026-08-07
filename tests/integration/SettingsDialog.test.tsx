@@ -156,6 +156,8 @@ describe("SettingsPage integration", () => {
       "settings.browsePlaceholderApp",
     );
     expect((appInput as HTMLInputElement).value).toBe("/home/mock/.cc-switch");
+    expect(await screen.findByText(/Visual Studio Code/)).toBeInTheDocument();
+    expect(screen.getByText(/chatLanguageModels\.json/)).toBeInTheDocument();
   });
 
   it("imports configuration and triggers success callback", async () => {

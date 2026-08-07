@@ -1,0 +1,190 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CopilotByokGroupPanel } from "@/components/settings/CopilotByokGroupPanel";
+
+const mocks = vi.hoisted(() => ({
+  fetchModelsForConfig: vi.fn(),
+  showFetchModelsError: vi.fn(),
+}));
+
+vi.mock("@/lib/api/model-fetch", () => ({
+  fetchModelsForConfig: mocks.fetchModelsForConfig,
+  showFetchModelsError: mocks.showFetchModelsError,
+}));
+
+vi.mock("@/components/providers/forms/shared", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/components/providers/forms/shared")
+    >();
+  return {
+    ...actual,
+    ModelDropdown: ({
+      models,
+      onSelect,
+    }: {
+      models: Array<{ id: string }>;
+      onSelect: (id: string) => void;
+    }) => (
+      <button
+        type="button"
+        aria-label="select fetched model"
+        onClick={() => onSelect(models[0].id)}
+      />
+    ),
+  };
+});
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    info: vi.fn(),
+  },
+}));
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { resolvedLanguage: "zh" },
+  }),
+}));
+
+describe("CopilotByokGroupPanel", () => {
+  beforeEach(() => {
+    mocks.fetchModelsForConfig.mockReset();
+    mocks.showFetchModelsError.mockReset();
+    mocks.fetchModelsForConfig.mockResolvedValue([
+      { id: "kimi-k2", ownedBy: "Moonshot" },
+    ]);
+  });
+
+  it("saves multiple models under one shared provider connection", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CopilotByokGroupPanel
+        open
+        group={null}
+        saving={false}
+        onOpenChange={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+
+    expect(screen.getByText("providerPreset.label")).toBeInTheDocument();
+    expect(screen.getByText("providerPreset.custom")).toBeInTheDocument();
+    expect(
+      screen.getByText("providerForm.customApiKeyHint"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("providerPreset.noSearchResults"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("provider.name"), {
+      target: { value: "Moonshot" },
+    });
+    fireEvent.change(screen.getByLabelText("provider.notes"), {
+      target: { value: "Coding plan" },
+    });
+    fireEvent.change(screen.getByLabelText("provider.websiteUrl"), {
+      target: { value: "https://platform.moonshot.cn" },
+    });
+    fireEvent.change(screen.getByLabelText("opencode.baseUrl"), {
+      target: { value: "https://api.example.com/v1/chat/completions" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "providerForm.fetchModels" }),
+    );
+    await waitFor(() =>
+      expect(mocks.fetchModelsForConfig).toHaveBeenCalledWith(
+        "https://api.example.com/v1/chat/completions",
+        "",
+        false,
+        undefined,
+        undefined,
+        "chat-completions",
+        {},
+      ),
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "select fetched model" }),
+    );
+
+    const firstModelId = screen.getByPlaceholderText(
+      "copilotByok.form.modelIdPlaceholder",
+    );
+    const firstModelName = screen.getByPlaceholderText(
+      "copilotByok.form.modelNamePlaceholder",
+    );
+    expect(firstModelId).toHaveValue("kimi-k2");
+    expect(firstModelName).toHaveValue("kimi-k2");
+    expect(screen.queryByText("opencode.modelLimits")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "opencode.toggleModelDetails" }),
+    );
+    expect(screen.getByText("opencode.modelLimits")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "opencode.addHeader" }));
+    fireEvent.change(
+      screen.getByPlaceholderText("opencode.headerNamePlaceholder"),
+      {
+        target: { value: "X-Title" },
+      },
+    );
+    fireEvent.blur(
+      screen.getByPlaceholderText("opencode.headerNamePlaceholder"),
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText("opencode.headerValuePlaceholder"),
+      {
+        target: { value: "CC Switch BYOK" },
+      },
+    );
+
+    fireEvent.change(firstModelName, {
+      target: { value: "Kimi K2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "opencode.addModel" }));
+
+    const modelIds = screen.getAllByPlaceholderText(
+      "copilotByok.form.modelIdPlaceholder",
+    );
+    const modelNames = screen.getAllByPlaceholderText(
+      "copilotByok.form.modelNamePlaceholder",
+    );
+    fireEvent.change(modelIds[1], { target: { value: "kimi-k3" } });
+    fireEvent.change(modelNames[1], { target: { value: "Kimi K3" } });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "provider.addToConfig" }),
+    );
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Moonshot",
+        url: "https://api.example.com/v1/chat/completions",
+        apiKey: "",
+        apiType: "chat-completions",
+        notes: "Coding plan",
+        websiteUrl: "https://platform.moonshot.cn",
+        requestHeaders: { "X-Title": "CC Switch BYOK" },
+        models: [
+          expect.objectContaining({
+            modelId: "kimi-k2",
+            name: "Kimi K2",
+            contextWindow: 128000,
+            maxOutputTokens: 8192,
+            toolCalling: true,
+            streaming: true,
+          }),
+          expect.objectContaining({ modelId: "kimi-k3", name: "Kimi K3" }),
+        ],
+      }),
+    );
+    expect(screen.getAllByLabelText("opencode.baseUrl")).toHaveLength(1);
+    expect(screen.getAllByLabelText("copilotByok.form.apiKey")).toHaveLength(1);
+  });
+});

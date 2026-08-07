@@ -46,6 +46,8 @@ pub struct VisibleApps {
     pub openclaw: bool,
     #[serde(default)]
     pub hermes: bool,
+    #[serde(default = "default_true")]
+    pub copilot_byok: bool,
 }
 
 impl Default for VisibleApps {
@@ -59,6 +61,7 @@ impl Default for VisibleApps {
             opencode: true,
             openclaw: true,
             hermes: false, // 默认不显示，需用户手动启用
+            copilot_byok: true,
         }
     }
 }
@@ -1161,6 +1164,7 @@ mod tests {
         .expect("visible apps");
 
         assert!(visible.is_visible(&AppType::ClaudeDesktop));
+        assert!(visible.copilot_byok);
     }
 
     #[test]
@@ -1177,5 +1181,15 @@ mod tests {
         .expect("visible apps");
 
         assert!(!visible.is_visible(&AppType::ClaudeDesktop));
+    }
+
+    #[test]
+    fn visible_apps_can_hide_copilot_byok() {
+        let visible: VisibleApps = serde_json::from_value(serde_json::json!({
+            "copilotByok": false
+        }))
+        .expect("visible apps");
+
+        assert!(!visible.copilot_byok);
     }
 }

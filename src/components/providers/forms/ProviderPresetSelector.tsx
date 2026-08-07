@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { FormLabel } from "@/components/ui/form";
+import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ClaudeIcon, CodexIcon, GeminiIcon } from "@/components/BrandIcons";
@@ -314,7 +314,7 @@ export function ProviderPresetSelector({
   return (
     <div ref={searchContainerRef} className="space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <FormLabel>{t("providerPreset.label")}</FormLabel>
+        <Label>{t("providerPreset.label")}</Label>
         <div className="flex items-center gap-2">
           {searchOpen && (
             <Input
@@ -403,7 +403,7 @@ export function ProviderPresetSelector({
           <span className="truncate">{t("providerPreset.custom")}</span>
         </button>
 
-        {visiblePresetEntries.length === 0 && (
+        {searchQuery.trim().length > 0 && visiblePresetEntries.length === 0 && (
           <div className="col-span-full rounded-md border border-dashed border-border-default px-3 py-2 text-xs text-muted-foreground">
             {t("providerPreset.noSearchResults", {
               defaultValue: "No matching presets.",
