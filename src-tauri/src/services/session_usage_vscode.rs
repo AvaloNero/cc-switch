@@ -30,12 +30,11 @@ const DATA_SOURCE: &str = "vscode_session";
 const REQUEST_ID_PREFIX: &str = "vscode_session:";
 const PROVIDER_ID: &str = "vscode-copilot";
 const PROVIDER_NAME: &str = "VSCode Copilot";
-// v7 replays v6 rows once so the readable model name captured by VS Code is
-// persisted in the synthetic usage provider. It also retains the v6 zero-cost
-// semantics, request-id namespacing, array mutation replay, resolved Auto model,
-// and stable provider identity.
-const SYNC_VERSION: &str = "v7";
-const CATALOG_SYNC_KEY: &str = "vscode_session:v7:catalog";
+// v8 replays v7 rows once after VS Code session details became exempt from the
+// generic 30-day rollup. Stable request IDs can now be upserted on catalog or
+// JSONL changes without re-aggregating the same historical request.
+const SYNC_VERSION: &str = "v8";
+const CATALOG_SYNC_KEY: &str = "vscode_session:v8:catalog";
 const MAX_SESSION_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SESSION_REQUESTS: usize = 10_000;
 
@@ -1371,6 +1370,21 @@ fn delete_stale_session_requests(
     Ok(deleted)
 }
 
+fn delete_legacy_session_rollups(db: &Database) -> Result<u32, AppError> {
+    // Copilot BYOK has no local-proxy data source, so every rollup under this
+    // app type was produced from the VS Code session importer.
+    let conn = lock_conn!(db.conn);
+    let deleted = conn
+        .execute(
+            "DELETE FROM usage_daily_rollups WHERE app_type = ?1",
+            [APP_TYPE],
+        )
+        .map_err(|error| {
+            AppError::Database(format!("清理重复的 VS Code 会话历史汇总失败: {error}"))
+        })?;
+    Ok(u32::try_from(deleted).unwrap_or(u32::MAX))
+}
+
 fn sync_from_roots(
     db: &Database,
     roots: &[PathBuf],
@@ -1456,6 +1470,14 @@ fn sync_from_roots(
     // the next sync retry unchanged files instead of permanently retaining a
     // stale model mapping after a transient read/parse failure.
     if result.errors.is_empty() {
+        if force_catalog_replay {
+            let deleted = delete_legacy_session_rollups(db)?;
+            if deleted > 0 {
+                log::info!(
+                    "[VSCODE-SESSION-SYNC] 已清理 {deleted} 条旧会话汇总；v8 明细将按稳定请求 ID 保留"
+                );
+            }
+        }
         update_sync_state(db, CATALOG_SYNC_KEY, 0, catalog.fingerprint)?;
     }
 
@@ -1892,6 +1914,76 @@ mod tests {
         let logs = db.get_request_logs(&Default::default(), 0, 10)?;
         assert_eq!(logs.data.len(), 1);
         assert_eq!(logs.data[0].model_display_name.as_deref(), Some("GPT Test"));
+        Ok(())
+    }
+
+    #[test]
+    fn successful_catalog_replay_replaces_legacy_session_rollups() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().unwrap();
+        let user_dir = temp.path().join("Code").join("User");
+        let sessions = user_dir
+            .join("workspaceStorage")
+            .join("workspace")
+            .join("chatSessions");
+        fs::create_dir_all(&sessions).unwrap();
+        write_lines(
+            &sessions.join("session.jsonl"),
+            &[json!({
+                "kind": 0,
+                "v": {
+                    "sessionId": "s-rollup",
+                    "creationDate": 1_700_000_000_000i64,
+                    "inputState": { "selectedModel": custom_selected("gpt-test", "GPT Test", "Acme") },
+                    "requests": [{
+                        "requestId": "r-rollup",
+                        "timestamp": 1_700_000_001_000i64,
+                        "modelId": "customendpoint/gpt-test",
+                        "promptTokens": 100,
+                        "completionTokens": 10
+                    }]
+                }
+            })],
+        );
+
+        let db = Database::memory()?;
+        let initial_catalog =
+            ByokCatalog::from_groups(&[group("g-1", "Acme", "gpt-test", "GPT Test")]);
+        sync_from_roots(&db, std::slice::from_ref(&user_dir), &initial_catalog)?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO usage_daily_rollups (
+                    date, app_type, provider_id, model, request_model, pricing_model,
+                    request_count, success_count, input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens, total_cost_usd, avg_latency_ms
+                ) VALUES (
+                    '2023-11-14', ?1, ?2, 'gpt-test', 'customendpoint/gpt-test',
+                    'gpt-test', 4, 4, 400, 40, 160, 0, '0', 0
+                )",
+                rusqlite::params![APP_TYPE, PROVIDER_ID],
+            )?;
+        }
+
+        let replay_catalog = ByokCatalog::from_groups(&[
+            group("g-1", "Acme", "gpt-test", "GPT Test"),
+            group("g-2", "Other", "other-model", "Other model"),
+        ]);
+        sync_from_roots(&db, &[user_dir], &replay_catalog)?;
+
+        let conn = lock_conn!(db.conn);
+        let rollups: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM usage_daily_rollups WHERE app_type = ?1",
+            [APP_TYPE],
+            |row| row.get(0),
+        )?;
+        let details: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proxy_request_logs
+             WHERE request_id = 'vscode_session:s-rollup:r-rollup'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(rollups, 0);
+        assert_eq!(details, 1);
         Ok(())
     }
 

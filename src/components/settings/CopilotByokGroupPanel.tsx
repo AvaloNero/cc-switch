@@ -56,6 +56,10 @@ import {
   mergeCopilotByokModelOptions,
   type CopilotByokModelPresetContext,
 } from "@/lib/copilotByokModelPresets";
+import {
+  fetchModelsDevPricing,
+  type ModelsDevResponse,
+} from "@/lib/modelsDevPricing";
 import { cn } from "@/lib/utils";
 
 const EDIT_TOOLS: CopilotByokEditTool[] = [
@@ -131,8 +135,12 @@ const emptyGroup = (): DraftGroup => ({
 function applyKnownDefaultsToDraft(
   model: DraftModel,
   context: CopilotByokModelPresetContext,
+  modelsDev?: ModelsDevResponse | null,
 ): DraftModel {
-  const preset = getCopilotByokModelPreset(context, model.modelId);
+  const preset = getCopilotByokModelPreset(context, model.modelId, {
+    modelName: model.name,
+    modelsDev,
+  });
   if (!preset) return model;
 
   let currentOptions: Record<string, unknown>;
@@ -293,6 +301,8 @@ export function CopilotByokGroupPanel({
   const [draft, setDraft] = useState<DraftGroup>(emptyGroup);
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
+  const [modelsDevCatalog, setModelsDevCatalog] =
+    useState<ModelsDevResponse | null>(null);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -302,6 +312,7 @@ export function CopilotByokGroupPanel({
     setDraft(next);
     setExpandedModels(new Set());
     setFetchedModels([]);
+    setModelsDevCatalog(null);
     setIsFetchingModels(false);
     setError(null);
   }, [group, open]);
@@ -323,17 +334,39 @@ export function CopilotByokGroupPanel({
         ([key]) => !key.startsWith(PROVIDER_HEADER_DRAFT_PREFIX),
       ),
     );
-    fetchModelsForConfig(
-      baseUrl,
-      apiKey,
-      false,
-      undefined,
-      undefined,
-      draft.apiType,
-      requestHeaders,
-    )
-      .then((models) => {
+    Promise.all([
+      fetchModelsForConfig(
+        baseUrl,
+        apiKey,
+        false,
+        undefined,
+        undefined,
+        draft.apiType,
+        requestHeaders,
+      ),
+      // models.dev is the same capability catalog used by OpenCode. Failure to
+      // load it must not hide the provider's own /models result; documented
+      // provider-contract fallbacks still apply offline.
+      fetchModelsDevPricing().catch(() => null),
+    ])
+      .then(([models, catalog]) => {
         setFetchedModels(models);
+        setModelsDevCatalog(catalog);
+        if (catalog) {
+          setDraft((current) => {
+            const context: CopilotByokModelPresetContext = {
+              providerName: current.name,
+              url: current.url,
+              apiType: current.apiType,
+            };
+            return {
+              ...current,
+              models: current.models.map((model) =>
+                applyKnownDefaultsToDraft(model, context, catalog),
+              ),
+            };
+          });
+        }
         if (models.length === 0) {
           toast.info(t("providerForm.fetchModelsEmpty"));
         } else {
@@ -374,7 +407,7 @@ export function CopilotByokGroupPanel({
           apiType: next.apiType,
         };
         next.models = next.models.map((model) =>
-          applyKnownDefaultsToDraft(model, context),
+          applyKnownDefaultsToDraft(model, context, modelsDevCatalog),
         );
       }
       return next;
@@ -412,11 +445,15 @@ export function CopilotByokGroupPanel({
             ? fetchedModel?.name?.trim() || modelId
             : model.name,
         };
-        return applyKnownDefaultsToDraft(updated, {
-          providerName: current.name,
-          url: current.url,
-          apiType: current.apiType,
-        });
+        return applyKnownDefaultsToDraft(
+          updated,
+          {
+            providerName: current.name,
+            url: current.url,
+            apiType: current.apiType,
+          },
+          modelsDevCatalog,
+        );
       }),
     }));
 
@@ -521,6 +558,10 @@ export function CopilotByokGroupPanel({
             apiType: draft.apiType,
           },
           normalizedModel.modelId,
+          {
+            modelName: normalizedModel.name,
+            modelsDev: modelsDevCatalog,
+          },
         );
         if (!preset) return normalizedModel;
         return {

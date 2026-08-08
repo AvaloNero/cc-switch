@@ -5,6 +5,7 @@ import { CopilotByokGroupPanel } from "@/components/settings/CopilotByokGroupPan
 
 const mocks = vi.hoisted(() => ({
   fetchModelsForConfig: vi.fn(),
+  fetchModelsDevPricing: vi.fn(),
   showFetchModelsError: vi.fn(),
 }));
 
@@ -12,6 +13,15 @@ vi.mock("@/lib/api/model-fetch", () => ({
   fetchModelsForConfig: mocks.fetchModelsForConfig,
   showFetchModelsError: mocks.showFetchModelsError,
 }));
+
+vi.mock("@/lib/modelsDevPricing", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/modelsDevPricing")>();
+  return {
+    ...actual,
+    fetchModelsDevPricing: mocks.fetchModelsDevPricing,
+  };
+});
 
 vi.mock("@/components/providers/forms/shared", async (importOriginal) => {
   const actual =
@@ -53,10 +63,12 @@ vi.mock("react-i18next", () => ({
 describe("CopilotByokGroupPanel", () => {
   beforeEach(() => {
     mocks.fetchModelsForConfig.mockReset();
+    mocks.fetchModelsDevPricing.mockReset();
     mocks.showFetchModelsError.mockReset();
     mocks.fetchModelsForConfig.mockResolvedValue([
       { id: "kimi-k2", name: "Kimi K2", ownedBy: "Moonshot" },
     ]);
+    mocks.fetchModelsDevPricing.mockResolvedValue({});
   });
 
   it("saves multiple models under one shared provider connection", async () => {
@@ -198,5 +210,79 @@ describe("CopilotByokGroupPanel", () => {
     );
     expect(screen.getAllByLabelText("opencode.baseUrl")).toHaveLength(1);
     expect(screen.getAllByLabelText("copilotByok.form.apiKey")).toHaveLength(1);
+  });
+
+  it("hydrates a fetched Kimi coding alias from models.dev capabilities", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    mocks.fetchModelsForConfig.mockResolvedValue([
+      {
+        id: "kimi-for-coding",
+        name: "K2.7 Coding",
+        ownedBy: "Moonshot",
+      },
+    ]);
+    mocks.fetchModelsDevPricing.mockResolvedValue({
+      moonshotai: {
+        name: "Moonshot AI",
+        models: {
+          "kimi-k2.7-code": {
+            name: "Kimi K2.7 Code",
+            tool_call: true,
+            reasoning: true,
+            modalities: {
+              input: ["text", "image", "video"],
+              output: ["text"],
+            },
+            limit: { context: 262_144, output: 262_144 },
+          },
+        },
+      },
+    });
+
+    render(
+      <CopilotByokGroupPanel
+        open
+        group={null}
+        saving={false}
+        onOpenChange={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("provider.name"), {
+      target: { value: "Kimi" },
+    });
+    fireEvent.change(screen.getByLabelText("opencode.baseUrl"), {
+      target: { value: "https://api.kimi.com/coding/v1" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "providerForm.fetchModels" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "select fetched model" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "provider.addToConfig" }),
+    );
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        models: [
+          expect.objectContaining({
+            modelId: "kimi-for-coding",
+            name: "K2.7 Coding",
+            toolCalling: true,
+            vision: true,
+            thinking: true,
+            streaming: true,
+            contextWindow: 262_144,
+            maxOutputTokens: 262_144,
+            supportsReasoningEffort: [],
+            modelOptions: { temperature: 1, top_p: 0.95 },
+          }),
+        ],
+      }),
+    );
   });
 });
