@@ -51,6 +51,11 @@ import type {
   CopilotByokGroup,
   CopilotByokModel,
 } from "@/lib/api";
+import {
+  getCopilotByokModelPreset,
+  mergeCopilotByokModelOptions,
+  type CopilotByokModelPresetContext,
+} from "@/lib/copilotByokModelPresets";
 import { cn } from "@/lib/utils";
 
 const EDIT_TOOLS: CopilotByokEditTool[] = [
@@ -123,23 +128,98 @@ const emptyGroup = (): DraftGroup => ({
   extra: {},
 });
 
+function applyKnownDefaultsToDraft(
+  model: DraftModel,
+  context: CopilotByokModelPresetContext,
+): DraftModel {
+  const preset = getCopilotByokModelPreset(context, model.modelId);
+  if (!preset) return model;
+
+  let currentOptions: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(model.modelOptionsText || "{}") as unknown;
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      throw new Error("modelOptions must be an object");
+    }
+    currentOptions = parsed as Record<string, unknown>;
+  } catch {
+    // Preserve invalid in-progress JSON so selecting a model never destroys
+    // what the user is currently editing. Save validation will still report it.
+    return {
+      ...model,
+      toolCalling: model.toolCalling ?? preset.toolCalling ?? null,
+      vision: model.vision ?? preset.vision ?? null,
+      thinking: model.thinking ?? preset.thinking ?? null,
+      streaming: model.streaming ?? preset.streaming ?? null,
+      contextWindow: model.contextWindow ?? preset.contextWindow ?? null,
+      maxInputTokens: model.maxInputTokens ?? preset.maxInputTokens ?? null,
+      maxOutputTokens: model.maxOutputTokens ?? preset.maxOutputTokens ?? null,
+      reasoningEffortsText:
+        model.reasoningEffortsText.trim() ||
+        preset.supportsReasoningEffort?.join(", ") ||
+        "",
+      reasoningEffortFormat:
+        model.reasoningEffortFormat ?? preset.reasoningEffortFormat ?? null,
+    };
+  }
+
+  const modelOptions = mergeCopilotByokModelOptions(
+    context,
+    model.modelId,
+    currentOptions,
+    preset.modelOptions,
+  );
+  return {
+    ...model,
+    toolCalling: model.toolCalling ?? preset.toolCalling ?? null,
+    vision: model.vision ?? preset.vision ?? null,
+    thinking: model.thinking ?? preset.thinking ?? null,
+    streaming: model.streaming ?? preset.streaming ?? null,
+    contextWindow: model.contextWindow ?? preset.contextWindow ?? null,
+    maxInputTokens: model.maxInputTokens ?? preset.maxInputTokens ?? null,
+    maxOutputTokens: model.maxOutputTokens ?? preset.maxOutputTokens ?? null,
+    editTools:
+      model.editTools.length > 0
+        ? model.editTools
+        : (preset.editTools ?? model.editTools),
+    reasoningEffortsText:
+      model.reasoningEffortsText.trim() ||
+      preset.supportsReasoningEffort?.join(", ") ||
+      "",
+    reasoningEffortFormat:
+      model.reasoningEffortFormat ?? preset.reasoningEffortFormat ?? null,
+    modelOptions,
+    modelOptionsText: JSON.stringify(modelOptions, null, 2),
+  };
+}
+
 function toDraft(group: CopilotByokGroup | null): DraftGroup {
   if (!group) return emptyGroup();
+  const context: CopilotByokModelPresetContext = {
+    providerName: group.name,
+    url: group.url,
+    apiType: group.apiType,
+  };
   return {
     ...structuredClone(group),
     requestHeaders: structuredClone(group.requestHeaders ?? {}),
-    models: group.models.map((model) => ({
-      ...structuredClone(model),
-      toolCalling: model.toolCalling ?? null,
-      vision: model.vision ?? null,
-      thinking: model.thinking ?? null,
-      streaming: model.streaming ?? null,
-      contextWindow: model.contextWindow ?? null,
-      maxInputTokens: model.maxInputTokens ?? null,
-      maxOutputTokens: model.maxOutputTokens ?? null,
-      reasoningEffortsText: model.supportsReasoningEffort.join(", "),
-      modelOptionsText: JSON.stringify(model.modelOptions ?? {}, null, 2),
-    })),
+    models: group.models.map((model) =>
+      applyKnownDefaultsToDraft(
+        {
+          ...structuredClone(model),
+          toolCalling: model.toolCalling ?? null,
+          vision: model.vision ?? null,
+          thinking: model.thinking ?? null,
+          streaming: model.streaming ?? null,
+          contextWindow: model.contextWindow ?? null,
+          maxInputTokens: model.maxInputTokens ?? null,
+          maxOutputTokens: model.maxOutputTokens ?? null,
+          reasoningEffortsText: model.supportsReasoningEffort.join(", "),
+          modelOptionsText: JSON.stringify(model.modelOptions ?? {}, null, 2),
+        },
+        context,
+      ),
+    ),
   };
 }
 
@@ -284,7 +364,21 @@ export function CopilotByokGroupPanel({
   const updateGroup = <K extends keyof DraftGroup>(
     key: K,
     value: DraftGroup[K],
-  ) => setDraft((current) => ({ ...current, [key]: value }));
+  ) =>
+    setDraft((current) => {
+      const next: DraftGroup = { ...current, [key]: value };
+      if (key === "name" || key === "url" || key === "apiType") {
+        const context: CopilotByokModelPresetContext = {
+          providerName: next.name,
+          url: next.url,
+          apiType: next.apiType,
+        };
+        next.models = next.models.map((model) =>
+          applyKnownDefaultsToDraft(model, context),
+        );
+      }
+      return next;
+    });
 
   const updateModel = <K extends keyof DraftModel>(
     id: string,
@@ -311,13 +405,18 @@ export function CopilotByokGroupPanel({
           Boolean(fetchedModel) ||
           !model.name.trim() ||
           model.name === model.modelId;
-        return {
+        const updated = {
           ...model,
           modelId,
           name: shouldSyncName
             ? fetchedModel?.name?.trim() || modelId
             : model.name,
         };
+        return applyKnownDefaultsToDraft(updated, {
+          providerName: current.name,
+          url: current.url,
+          apiType: current.apiType,
+        });
       }),
     }));
 
@@ -404,7 +503,7 @@ export function CopilotByokGroupPanel({
           modelOptionsText: _modelOptionsText,
           ...savedModel
         } = model;
-        return {
+        const normalizedModel: CopilotByokModel = {
           ...savedModel,
           modelId: model.modelId.trim(),
           name: model.name.trim(),
@@ -414,6 +513,51 @@ export function CopilotByokGroupPanel({
               ? model.reasoningEffortFormat || draft.apiType
               : null,
           modelOptions: parseObject(model.modelOptionsText),
+        };
+        const preset = getCopilotByokModelPreset(
+          {
+            providerName: draft.name,
+            url: draft.url,
+            apiType: draft.apiType,
+          },
+          normalizedModel.modelId,
+        );
+        if (!preset) return normalizedModel;
+        return {
+          ...normalizedModel,
+          toolCalling:
+            normalizedModel.toolCalling ?? preset.toolCalling ?? null,
+          vision: normalizedModel.vision ?? preset.vision ?? null,
+          thinking: normalizedModel.thinking ?? preset.thinking ?? null,
+          streaming: normalizedModel.streaming ?? preset.streaming ?? null,
+          contextWindow:
+            normalizedModel.contextWindow ?? preset.contextWindow ?? null,
+          maxInputTokens:
+            normalizedModel.maxInputTokens ?? preset.maxInputTokens ?? null,
+          maxOutputTokens:
+            normalizedModel.maxOutputTokens ?? preset.maxOutputTokens ?? null,
+          editTools:
+            normalizedModel.editTools.length > 0
+              ? normalizedModel.editTools
+              : (preset.editTools ?? normalizedModel.editTools),
+          supportsReasoningEffort:
+            normalizedModel.supportsReasoningEffort.length > 0
+              ? normalizedModel.supportsReasoningEffort
+              : (preset.supportsReasoningEffort ?? []),
+          reasoningEffortFormat:
+            normalizedModel.reasoningEffortFormat ??
+            preset.reasoningEffortFormat ??
+            null,
+          modelOptions: mergeCopilotByokModelOptions(
+            {
+              providerName: draft.name,
+              url: draft.url,
+              apiType: draft.apiType,
+            },
+            normalizedModel.modelId,
+            normalizedModel.modelOptions,
+            preset.modelOptions,
+          ),
         };
       });
       await onSave({

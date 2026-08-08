@@ -22,6 +22,67 @@ fn is_vscode_secret_reference(value: &str) -> bool {
         .is_some_and(|key| !key.trim().is_empty())
 }
 
+fn is_kimi_provider(provider_name: &str, endpoint: &str) -> bool {
+    let provider_name = provider_name.trim().to_ascii_lowercase();
+    let hostname = url::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    provider_name.contains("kimi")
+        || provider_name.contains("moonshot")
+        || matches!(
+            hostname.as_str(),
+            "api.kimi.com" | "api.moonshot.cn" | "api.moonshot.ai"
+        )
+        || hostname.ends_with(".api.kimi.com")
+        || hostname.ends_with(".api.moonshot.cn")
+        || hostname.ends_with(".api.moonshot.ai")
+}
+
+fn is_kimi_k3(model_id: &str) -> bool {
+    let model_id = model_id.trim().to_ascii_lowercase();
+    matches!(model_id.as_str(), "k3" | "kimi-k3")
+        || model_id.ends_with("/k3")
+        || model_id.ends_with(":k3")
+}
+
+fn is_minimax_provider(provider_name: &str, endpoint: &str) -> bool {
+    let provider_name = provider_name.trim().to_ascii_lowercase();
+    let hostname = url::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    provider_name.contains("minimax")
+        || matches!(hostname.as_str(), "api.minimax.io" | "api.minimaxi.com")
+        || hostname.ends_with(".api.minimax.io")
+        || hostname.ends_with(".api.minimaxi.com")
+}
+
+#[derive(Clone, Copy)]
+enum MiniMaxModelFamily {
+    M3,
+    M2,
+}
+
+fn minimax_model_family(model_id: &str) -> Option<MiniMaxModelFamily> {
+    let normalized = model_id.trim().to_ascii_lowercase();
+    let model_id = normalized
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or(normalized.as_str());
+    match model_id {
+        "minimax-m3" => Some(MiniMaxModelFamily::M3),
+        "minimax-m2"
+        | "minimax-m2.1"
+        | "minimax-m2.1-highspeed"
+        | "minimax-m2.5"
+        | "minimax-m2.5-highspeed"
+        | "minimax-m2.7"
+        | "minimax-m2.7-highspeed" => Some(MiniMaxModelFamily::M2),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CopilotByokModel {
@@ -91,6 +152,78 @@ impl CopilotByokModel {
         self.context_window = self.context_window.filter(|value| *value > 0);
         self.max_input_tokens = self.max_input_tokens.filter(|value| *value > 0);
         self.max_output_tokens = self.max_output_tokens.filter(|value| *value > 0);
+    }
+
+    fn apply_sampling_defaults(&mut self, temperature: f64, top_p: f64, fixed: bool) {
+        if self.model_options.is_null() {
+            self.model_options = json!({});
+        }
+        let Some(options) = self.model_options.as_object_mut() else {
+            return;
+        };
+        if fixed {
+            options.insert("temperature".to_string(), json!(temperature));
+            options.insert("top_p".to_string(), json!(top_p));
+        } else {
+            options
+                .entry("temperature".to_string())
+                .or_insert_with(|| json!(temperature));
+            options
+                .entry("top_p".to_string())
+                .or_insert_with(|| json!(top_p));
+        }
+    }
+
+    fn apply_known_defaults(&mut self, provider_name: &str, endpoint: &str, api_type: &str) {
+        if is_kimi_provider(provider_name, endpoint) && is_kimi_k3(&self.model_id) {
+            // K3's documented model contract. Keep explicit capability
+            // overrides, while filling omitted values so a fetched model
+            // immediately works in VS Code Agent mode.
+            self.tool_calling.get_or_insert(true);
+            self.vision.get_or_insert(true);
+            self.thinking.get_or_insert(true);
+            self.streaming.get_or_insert(true);
+            self.context_window.get_or_insert(1_000_000);
+            if self.supports_reasoning_effort.is_empty() {
+                self.supports_reasoning_effort = ["low", "high", "max"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect();
+            }
+            if self.reasoning_effort_format.is_none() {
+                self.reasoning_effort_format = Some(api_type.to_string());
+            }
+            // VS Code Custom Endpoint reads temperature and top_p from
+            // modelOptions. K3 accepts only these fixed values.
+            self.apply_sampling_defaults(1.0, 0.95, true);
+            return;
+        }
+
+        let family = is_minimax_provider(provider_name, endpoint)
+            .then(|| minimax_model_family(&self.model_id))
+            .flatten();
+        let Some(family) = family else {
+            // Unknown model families deliberately stay unspecified rather than
+            // receiving guessed capabilities that could break requests.
+            return;
+        };
+        self.tool_calling.get_or_insert(true);
+        self.thinking.get_or_insert(true);
+        self.streaming.get_or_insert(true);
+        match family {
+            MiniMaxModelFamily::M3 => {
+                self.vision.get_or_insert(true);
+                self.context_window.get_or_insert(1_000_000);
+                self.max_output_tokens.get_or_insert(524_288);
+                self.apply_sampling_defaults(1.0, 0.95, false);
+            }
+            MiniMaxModelFamily::M2 => {
+                self.vision.get_or_insert(false);
+                self.context_window.get_or_insert(204_800);
+                self.max_output_tokens.get_or_insert(204_800);
+                self.apply_sampling_defaults(1.0, 0.9, false);
+            }
+        }
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
@@ -301,6 +434,7 @@ impl CopilotByokGroup {
             .collect();
         for model in &mut self.models {
             model.normalize();
+            model.apply_known_defaults(&self.name, &self.url, &self.api_type);
         }
     }
 
@@ -568,6 +702,7 @@ mod tests {
     #[test]
     fn unknown_model_capabilities_are_not_invented() {
         let mut value = group();
+        value.models[0].model_id = "kimi-k2".to_string();
         let model = &mut value.models[0];
         model.tool_calling = None;
         model.vision = None;
@@ -575,6 +710,7 @@ mod tests {
         model.streaming = None;
         model.context_window = None;
         model.max_output_tokens = None;
+        value.normalize();
 
         let rendered = value.to_language_model_group();
         let model = &rendered["models"][0];
@@ -588,6 +724,109 @@ mod tests {
         ] {
             assert!(model.get(field).is_none(), "unexpected field: {field}");
         }
+    }
+
+    #[test]
+    fn kimi_k3_defaults_make_agent_requests_compatible() {
+        let mut value = group();
+        value.url = "https://api.kimi.com/coding/v1".to_string();
+        value.models.truncate(1);
+        let model = &mut value.models[0];
+        model.model_id = "k3".to_string();
+        model.tool_calling = None;
+        model.vision = None;
+        model.thinking = None;
+        model.streaming = None;
+        model.context_window = None;
+        model.max_input_tokens = None;
+        model.max_output_tokens = None;
+        model.supports_reasoning_effort.clear();
+        model.reasoning_effort_format = None;
+        model.model_options = json!({ "top_p": 1, "custom": true });
+
+        value.normalize();
+
+        let model = &value.models[0];
+        assert_eq!(model.tool_calling, Some(true));
+        assert_eq!(model.vision, Some(true));
+        assert_eq!(model.thinking, Some(true));
+        assert_eq!(model.streaming, Some(true));
+        assert_eq!(model.context_window, Some(1_000_000));
+        assert_eq!(model.supports_reasoning_effort, vec!["low", "high", "max"]);
+        assert_eq!(
+            model.reasoning_effort_format.as_deref(),
+            Some("chat-completions")
+        );
+        assert_eq!(model.model_options["temperature"], 1.0);
+        assert_eq!(model.model_options["top_p"], 0.95);
+        assert_eq!(model.model_options["custom"], true);
+
+        let rendered = value.to_language_model_group();
+        assert_eq!(rendered["models"][0]["toolCalling"], true);
+        assert_eq!(rendered["models"][0]["contextWindow"], 1_000_000);
+        assert_eq!(rendered["models"][0]["modelOptions"]["top_p"], 0.95);
+    }
+
+    #[test]
+    fn kimi_k3_keeps_explicit_capability_overrides() {
+        let mut value = group();
+        value.url = "https://api.kimi.com/coding/v1".to_string();
+        value.models.truncate(1);
+        let model = &mut value.models[0];
+        model.model_id = "k3".to_string();
+        model.tool_calling = Some(false);
+        model.vision = Some(false);
+        model.context_window = Some(128_000);
+
+        value.normalize();
+
+        assert_eq!(value.models[0].tool_calling, Some(false));
+        assert_eq!(value.models[0].vision, Some(false));
+        assert_eq!(value.models[0].context_window, Some(128_000));
+    }
+
+    #[test]
+    fn minimax_m_series_defaults_follow_the_documented_model_contract() {
+        let mut value = group();
+        value.name = "MiniMax".to_string();
+        value.url = "https://api.minimax.io/v1".to_string();
+        for model in &mut value.models {
+            model.tool_calling = None;
+            model.vision = None;
+            model.thinking = None;
+            model.streaming = None;
+            model.context_window = None;
+            model.max_input_tokens = None;
+            model.max_output_tokens = None;
+            model.supports_reasoning_effort.clear();
+            model.reasoning_effort_format = None;
+            model.model_options = json!({});
+        }
+        value.models[0].model_id = "MiniMax-M3".to_string();
+        value.models[0].model_options = json!({ "top_p": 0.7 });
+        value.models[1].model_id = "MiniMax-M2.7-highspeed".to_string();
+
+        value.normalize();
+
+        let m3 = &value.models[0];
+        assert_eq!(m3.tool_calling, Some(true));
+        assert_eq!(m3.vision, Some(true));
+        assert_eq!(m3.thinking, Some(true));
+        assert_eq!(m3.streaming, Some(true));
+        assert_eq!(m3.context_window, Some(1_000_000));
+        assert_eq!(m3.max_output_tokens, Some(524_288));
+        assert_eq!(m3.model_options["temperature"], 1.0);
+        assert_eq!(m3.model_options["top_p"], 0.7);
+
+        let m2 = &value.models[1];
+        assert_eq!(m2.tool_calling, Some(true));
+        assert_eq!(m2.vision, Some(false));
+        assert_eq!(m2.thinking, Some(true));
+        assert_eq!(m2.streaming, Some(true));
+        assert_eq!(m2.context_window, Some(204_800));
+        assert_eq!(m2.max_output_tokens, Some(204_800));
+        assert_eq!(m2.model_options["temperature"], 1.0);
+        assert_eq!(m2.model_options["top_p"], 0.9);
     }
 
     #[test]

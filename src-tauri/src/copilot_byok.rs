@@ -15,7 +15,7 @@ use crate::provider::Provider;
 use model::is_managed_group;
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use store::{CopilotByokCustomTarget, CopilotByokStore};
@@ -250,19 +250,53 @@ fn custom_target_state(
     }
 }
 
+fn detected_target_aliases(targets: &[VsCodeProfileTarget]) -> HashMap<String, String> {
+    let mut representatives: HashMap<(String, String, String), String> = HashMap::new();
+    let mut aliases = HashMap::new();
+    for target in targets {
+        let identity = (
+            store::path_identity_key(&target.path()),
+            store::path_identity_key(&target.prompts_home()),
+            store::path_identity_key(&target.mcp_path()),
+        );
+        let representative = representatives
+            .entry(identity)
+            .or_insert_with(|| target.id.clone())
+            .clone();
+        aliases.insert(target.id.clone(), representative);
+    }
+    aliases
+}
+
+fn canonicalize_detected_target_ids(
+    target_ids: &[String],
+    aliases: &HashMap<String, String>,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    target_ids
+        .iter()
+        .map(|id| aliases.get(id).cloned().unwrap_or_else(|| id.clone()))
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
+}
+
 fn build_state(store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
     let detected = vscode::discover_vscode_targets()?;
+    let aliases = detected_target_aliases(&detected);
     let available_ids: HashSet<String> = detected
         .iter()
+        .filter(|target| aliases.get(&target.id) == Some(&target.id))
         .map(|target| target.id.clone())
         .chain(store.custom_targets.iter().map(|target| target.id.clone()))
         .collect();
-    let mut selected_target_ids = sync::effective_selected_target_ids(&store, &detected);
+    let effective_target_ids = sync::effective_selected_target_ids(&store, &detected);
+    let mut selected_target_ids = canonicalize_detected_target_ids(&effective_target_ids, &aliases);
     selected_target_ids.retain(|id| available_ids.contains(id));
     let selected_ids: HashSet<String> = selected_target_ids.iter().cloned().collect();
 
     let mut targets: Vec<CopilotByokTargetState> = detected
         .into_iter()
+        .filter(|target| aliases.get(&target.id) == Some(&target.id))
         .map(|target| detected_target_state(target, &selected_ids))
         .collect();
     targets.extend(
@@ -372,7 +406,8 @@ pub fn set_targets(db: &Database, target_ids: Vec<String>) -> Result<CopilotByok
 
     let mut updated = current.clone();
     updated.targets_initialized = true;
-    updated.selected_target_ids = target_ids;
+    let aliases = detected_target_aliases(&detected);
+    updated.selected_target_ids = canonicalize_detected_target_ids(&target_ids, &aliases);
     commit_and_build(
         db,
         &current,
@@ -641,6 +676,89 @@ mod tests {
             }],
             extra: BTreeMap::new(),
         }
+    }
+
+    fn detected_target(
+        id: &str,
+        profile_name: &str,
+        is_default: bool,
+        language_models_path: &str,
+        prompts_home: &str,
+        mcp_path: &str,
+    ) -> VsCodeProfileTarget {
+        VsCodeProfileTarget {
+            id: id.to_string(),
+            edition: VsCodeEdition::Stable,
+            edition_name: "Visual Studio Code".to_string(),
+            profile_id: (!is_default).then(|| profile_name.to_string()),
+            profile_name: profile_name.to_string(),
+            is_default,
+            user_dir: "C:/Code/User".to_string(),
+            resources: vscode::VsCodeProfileResources {
+                language_models_path: language_models_path.to_string(),
+                prompts_home: prompts_home.to_string(),
+                mcp_path: mcp_path.to_string(),
+            },
+            config_exists: false,
+            backup_exists: false,
+        }
+    }
+
+    #[test]
+    fn exact_profile_resource_aliases_collapse_to_the_default_target() {
+        let default = detected_target(
+            "stable:default",
+            "Default",
+            true,
+            "C:/Code/User/chatLanguageModels.json",
+            "C:/Code/User/prompts",
+            "C:/Code/User/mcp.json",
+        );
+        let agents = detected_target(
+            "stable:profile:builtin/agents",
+            "Agents",
+            false,
+            "C:/Code/User/chatLanguageModels.json",
+            "C:/Code/User/prompts",
+            "C:/Code/User/mcp.json",
+        );
+        let shared_models_only = detected_target(
+            "stable:profile:work",
+            "Work",
+            false,
+            "C:/Code/User/chatLanguageModels.json",
+            "C:/Code/User/profiles/work/prompts",
+            "C:/Code/User/profiles/work/mcp.json",
+        );
+        let targets = vec![default, agents, shared_models_only];
+
+        let aliases = detected_target_aliases(&targets);
+        assert_eq!(
+            aliases.get("stable:profile:builtin/agents"),
+            Some(&"stable:default".to_string())
+        );
+        assert_eq!(
+            aliases.get("stable:profile:work"),
+            Some(&"stable:profile:work".to_string())
+        );
+        assert_eq!(
+            canonicalize_detected_target_ids(
+                &[
+                    "stable:profile:builtin/agents".to_string(),
+                    "stable:default".to_string(),
+                    "stable:profile:work".to_string(),
+                ],
+                &aliases,
+            ),
+            vec!["stable:default", "stable:profile:work"]
+        );
+        assert_eq!(
+            targets
+                .iter()
+                .filter(|target| aliases.get(&target.id) == Some(&target.id))
+                .count(),
+            2
+        );
     }
 
     #[test]
