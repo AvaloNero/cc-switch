@@ -13,13 +13,13 @@ CC Switch exposes VS Code Copilot as a first-level application and manages its C
 - Stopping management removes CC Switch-owned groups and clears the selected profiles so later catalog edits do not add them back.
 - The manual sync action is retained as a repair/reconciliation operation.
 
-The app switcher opens a provider-only catalog as a primary page, matching the other managed applications instead of exposing profile and file-management controls there. Its toolbar uses VS Code's real configuration locations for Skills, Prompt Files, Sessions, and MCP, and also exposes Usage Statistics and add provider. The add action opens the shared full-screen provider form with an expandable multi-model editor. VS Code Copilot is shown by default in Settings > General > Apps on Main Page and can be hidden or shown again there.
+The app switcher opens a provider-only catalog as a primary page, matching the other managed applications instead of exposing profile and file-management controls there. Its toolbar uses VS Code's real configuration locations for Skills, Prompt Files, Sessions, and MCP, exposes Sync Targets with the same Agents-configuration icon used by OpenClaw, and retains the add-provider action. Usage data remains available in the shared Usage Statistics settings page, without a dedicated shortcut on the VS Code Copilot catalog page. The add action opens the shared full-screen provider form with an expandable multi-model editor. VS Code Copilot is shown by default in Settings > General > Apps on Main Page and can be hidden or shown again there.
 
-Advanced Settings > Configuration Directories contains only the VS Code profile sync targets and their import, restore, resync, and stop-management actions. Provider cards and provider editing remain on the first-level application page.
+The Sync Targets toolbar action opens VS Code profile selection together with import, restore, resync, and stop-management actions. Advanced Settings > Configuration Directories remains limited to application directory overrides. Provider cards and provider editing remain on the first-level application page.
 
 ## Managed files
 
-Detected targets include VS Code Stable and Insiders default profiles and named profiles declared in VS Code's profile metadata. Profiles that inherit the default profile's language-model configuration are omitted because they share the same target file. A custom absolute path to `chatLanguageModels.json` can also be added. Canonical path identity prevents the same physical file from being managed twice through aliases such as `..`, symlinks, or Windows case differences.
+Detected targets include VS Code Stable and Insiders default profiles and named profiles declared in VS Code's profile metadata. Language models, prompts, and MCP are resolved independently according to the corresponding VS Code Profile inheritance flags, and each resource is deduplicated by physical path before synchronization. A custom absolute path to `chatLanguageModels.json` can also be added. Canonical path identity prevents the same physical file from being managed twice through aliases such as `..`, symlinks, or Windows case differences.
 
 New managed groups carry CC Switch ownership metadata without altering the provider-facing Group name. Groups created by older branch builds with the `CC Switch:` prefix are also recognized and migrated. Other Custom Endpoint provider groups are preserved.
 
@@ -29,7 +29,7 @@ Before the first write to an existing target, CC Switch creates:
 chatLanguageModels.json.cc-switch.bak
 ```
 
-The portable provider catalog is stored in the normal CC Switch provider database under its own `copilot-byok-catalog` namespace, so database export, WebDAV, and S3 synchronization include it without colliding with the normalized `VSCode Copilot` usage provider. Selected VS Code editions/profiles and custom absolute paths remain in the device-local `copilot-byok.json` store and are intentionally excluded from portable catalog data. Catalog changes and all selected profile writes are committed as one operation: targets are preflighted first, the catalog replacement is atomic, and a later write failure restores every target, backup, and catalog snapshot.
+The portable provider catalog is stored in the normal CC Switch provider database under its own `copilot-byok-catalog` namespace, so database export, WebDAV, and S3 synchronization include it without colliding with the normalized `VSCode Copilot` usage provider. Selected VS Code editions/profiles and custom absolute paths remain in the device-local `copilot-byok.json` store and are intentionally excluded from portable catalog data. Catalog and profile updates are preflighted and rollback-protected. If profile synchronization fails, CC Switch restores the previous catalog and target snapshots. Startup synchronization reconciles the catalog and selected targets after an interrupted process.
 
 ## Existing configuration import
 
@@ -89,36 +89,4 @@ cargo test --manifest-path src-tauri/Cargo.toml copilot_byok --lib
 
 The repository root intentionally has no `Cargo.toml`; always pass `--manifest-path src-tauri/Cargo.toml` to Cargo commands.
 
-On the Windows Codex desktop runtime, a fallback `pnpm` invocation can attempt dependency approval again and fail with `ERR_PNPM_IGNORED_BUILDS` even when the checked-out `node_modules` is already usable. Do not add generated `allowBuilds` placeholders to `pnpm-workspace.yaml`. For verification in that environment, invoke the repository-local binaries directly:
-
-```powershell
-.\node_modules\.bin\tsc.cmd --noEmit
-.\node_modules\.bin\prettier.cmd --check "src/**/*.{js,jsx,ts,tsx,css,json}"
-.\node_modules\.bin\vitest.cmd run
-npm run build:renderer
-.\node_modules\.bin\tauri.cmd build --bundles nsis --config src-tauri/tauri.codex-local-build.json
-```
-
-`tauri.codex-local-build.json` is a temporary, untracked local override with an empty
-`beforeBuildCommand` and `createUpdaterArtifacts: false`. It prevents Tauri from invoking the
-Codex Runtime's `pnpm install` fallback after the renderer has already been built, and avoids
-requiring the release-only updater signing key. Remove the override after the build and never
-commit it. The last command is still the formal NSIS desktop packaging path; a browser-only Vite
-server is not a substitute for a successful Tauri package build.
-
-The temporary override contains only:
-
-```json
-{
-  "build": { "beforeBuildCommand": "" },
-  "bundle": { "createUpdaterArtifacts": false, "targets": ["nsis"] }
-}
-```
-
-Before rebuilding, check whether a previous test launch is still running directly from
-`src-tauri/target/release/cc-switch.exe`. That exact process locks the linker output on Windows and
-causes `failed to remove file ... cc-switch.exe` / `os error 5`. Stop only the process whose
-resolved executable path matches that build output; do not terminate an installed CC Switch from
-`Program Files` or another directory.
-
-Also manually verify that first launch selects the Stable default profile, then verify explicit Stable/Insiders default and named-profile selection, inherited-profile filtering, preservation of user-owned groups, import conflict behavior, stop-management deselection, backup restore, explicit empty target selection, and repeated idempotent synchronization.
+Also manually verify that first launch selects the Stable default profile, then verify explicit Stable/Insiders default and named-profile selection, independent language-model/prompt/MCP inheritance, preservation of user-owned groups, import conflict behavior, stop-management deselection, backup restore, explicit empty target selection, and repeated idempotent synchronization.

@@ -13,6 +13,7 @@ mod copilot_byok;
 mod database;
 mod deeplink;
 mod error;
+mod file_transaction;
 mod gemini_config;
 mod gemini_mcp;
 mod grok_config;

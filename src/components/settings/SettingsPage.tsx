@@ -55,7 +55,6 @@ import {
 import { LogConfigPanel } from "@/components/settings/LogConfigPanel";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
 import { CodexAuthSettings } from "@/components/settings/CodexAuthSettings";
-import { CopilotByokSettings } from "@/components/settings/CopilotByokSettings";
 import { useInstalledSkills } from "@/hooks/useSkills";
 import { useSettings } from "@/hooks/useSettings";
 import { useImportExport } from "@/hooks/useImportExport";
@@ -366,9 +365,6 @@ export function SettingsPage({
                             onBrowseDirectory={browseDirectory}
                             onResetDirectory={resetDirectory}
                           />
-                          <div className="mt-6 border-t border-border/50 pt-6">
-                            <CopilotByokSettings mode="targets" />
-                          </div>
                         </AccordionContent>
                       </AccordionItem>
 

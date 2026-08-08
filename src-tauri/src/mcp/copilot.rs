@@ -1,6 +1,7 @@
 use crate::app_config::{McpApps, McpServer};
-use crate::config::write_json_file;
+use crate::config::serialize_json_file_contents;
 use crate::error::AppError;
+use crate::file_transaction::{commit_file_updates, FileUpdate};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fs;
@@ -9,13 +10,7 @@ use std::path::{Path, PathBuf};
 const MAX_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
 
 fn target_paths() -> Result<Vec<PathBuf>, AppError> {
-    crate::copilot_byok::selected_language_model_paths().map(|paths| {
-        paths
-            .into_iter()
-            .filter_map(|path| path.parent().map(Path::to_path_buf))
-            .map(|dir| dir.join("mcp.json"))
-            .collect()
-    })
+    crate::copilot_byok::selected_mcp_paths()
 }
 
 fn read_root(path: &Path) -> Result<Map<String, Value>, AppError> {
@@ -58,7 +53,11 @@ fn read_root(path: &Path) -> Result<Map<String, Value>, AppError> {
         })
 }
 
-fn update_server(path: &Path, id: &str, server: Option<&Value>) -> Result<(), AppError> {
+fn updated_server_contents(
+    path: &Path,
+    id: &str,
+    server: Option<&Value>,
+) -> Result<Vec<u8>, AppError> {
     let mut root = read_root(path)?;
     let servers = root
         .entry("servers".to_string())
@@ -73,34 +72,47 @@ fn update_server(path: &Path, id: &str, server: Option<&Value>) -> Result<(), Ap
 
     match server {
         Some(server) => {
-            if !server.is_object() {
-                return Err(AppError::InvalidInput(
-                    "VS Code MCP server configuration must be a JSON object".to_string(),
-                ));
-            }
             servers.insert(id.to_string(), server.clone());
         }
         None => {
             servers.remove(id);
         }
     }
-    write_json_file(path, &Value::Object(root))
+    serialize_json_file_contents(&Value::Object(root))
+}
+
+fn update_paths(paths: Vec<PathBuf>, id: &str, server: Option<&Value>) -> Result<(), AppError> {
+    if server.is_some_and(|server| !server.is_object()) {
+        return Err(AppError::InvalidInput(
+            "VS Code MCP server configuration must be a JSON object".to_string(),
+        ));
+    }
+
+    // Read and validate every selected Profile before the first write. The
+    // shared transaction then restores earlier targets if a later write fails.
+    let updates = paths
+        .into_iter()
+        .map(|path| {
+            updated_server_contents(&path, id, server)
+                .map(|contents| FileUpdate::write(path, contents))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    commit_file_updates(updates, Some(MAX_CONFIG_BYTES), "VS Code MCP config")
 }
 
 pub fn sync_single_server_to_copilot(id: &str, server: &Value) -> Result<(), AppError> {
-    for path in target_paths()? {
-        update_server(&path, id, Some(server))?;
-    }
-    Ok(())
+    update_paths(target_paths()?, id, Some(server))
 }
 
 pub fn remove_server_from_copilot(id: &str) -> Result<(), AppError> {
-    for path in target_paths()? {
-        if path.exists() {
-            update_server(&path, id, None)?;
-        }
-    }
-    Ok(())
+    update_paths(
+        target_paths()?
+            .into_iter()
+            .filter(|path| path.exists())
+            .collect(),
+        id,
+        None,
+    )
 }
 
 pub fn import_from_copilot() -> Result<Vec<McpServer>, AppError> {
@@ -130,4 +142,31 @@ pub fn import_from_copilot() -> Result<Vec<McpServer>, AppError> {
             tags: Vec::new(),
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn invalid_later_profile_leaves_every_mcp_target_unchanged() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let first = temp.path().join("first").join("mcp.json");
+        let second = temp.path().join("second").join("mcp.json");
+        fs::create_dir_all(first.parent().unwrap()).expect("first directory");
+        fs::create_dir_all(second.parent().unwrap()).expect("second directory");
+        let original = br#"{"servers":{"existing":{"command":"old"}}}"#;
+        fs::write(&first, original).expect("first config");
+        fs::write(&second, "not valid json5").expect("invalid second config");
+
+        let result = update_paths(
+            vec![first.clone(), second],
+            "new",
+            Some(&json!({"command": "new"})),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(first).expect("first unchanged"), original);
+    }
 }

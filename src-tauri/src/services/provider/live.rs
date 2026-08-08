@@ -1291,7 +1291,7 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
     // Sync providers based on mode
     for app_type in AppType::all() {
         if matches!(app_type, AppType::CopilotByok) {
-            crate::copilot_byok::sync(state.db.as_ref())?;
+            crate::copilot_byok::sync_if_configured(state.db.as_ref())?;
         } else if app_type.is_additive_mode() {
             // Additive mode: sync ALL providers
             sync_all_providers_to_live(state, &app_type)?;

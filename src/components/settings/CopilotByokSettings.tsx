@@ -265,8 +265,6 @@ export const CopilotByokSettings = forwardRef<
     selectedProfiles: t("copilotByok.selectedProfiles"),
     enabledModels: t("copilotByok.enabledModels"),
     changedFiles: t("copilotByok.changedFiles"),
-    securityTitle: t("copilotByok.securityTitle"),
-    security: t("copilotByok.security"),
     readError: t("copilotByok.readError"),
     saveModelSuccess: t("copilotByok.saveModelSuccess"),
     saveModelLocalSuccess: t("copilotByok.saveModelLocalSuccess"),

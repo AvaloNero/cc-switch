@@ -30,11 +30,12 @@ const DATA_SOURCE: &str = "vscode_session";
 const REQUEST_ID_PREFIX: &str = "vscode_session:";
 const PROVIDER_ID: &str = "vscode-copilot";
 const PROVIDER_NAME: &str = "VSCode Copilot";
-// v6 replays v5 rows once so official Copilot subscription traffic adopts the
-// zero-cost semantics. It also retains the v5 request-id namespacing, array
-// mutation replay, resolved Auto model, and stable provider identity.
-const SYNC_VERSION: &str = "v6";
-const CATALOG_SYNC_KEY: &str = "vscode_session:v6:catalog";
+// v7 replays v6 rows once so the readable model name captured by VS Code is
+// persisted in the synthetic usage provider. It also retains the v6 zero-cost
+// semantics, request-id namespacing, array mutation replay, resolved Auto model,
+// and stable provider identity.
+const SYNC_VERSION: &str = "v7";
+const CATALOG_SYNC_KEY: &str = "vscode_session:v7:catalog";
 const MAX_SESSION_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SESSION_REQUESTS: usize = 10_000;
 
@@ -1039,24 +1040,35 @@ fn sync_provider(db: &Database, entry: &CatalogEntry) -> Result<(), AppError> {
         .icon
         .clone()
         .or_else(|| Some("vscode-copilot-byok".to_string()));
-    if db
-        .get_provider_by_id(&entry.group_id, APP_TYPE)?
-        .is_some_and(|provider| {
-            provider.name == PROVIDER_NAME
-                && provider.settings_config == json!({ "source": DATA_SOURCE })
-                && provider.category.as_deref() == Some("VS Code Copilot")
-                && provider.icon == icon
-                && provider.icon_color == entry.icon_color
-                && provider.website_url == entry.website_url
-                && provider.notes == entry.notes
-        })
-    {
+    let existing = db.get_provider_by_id(&entry.group_id, APP_TYPE)?;
+    let mut model_names = existing
+        .as_ref()
+        .and_then(|provider| provider.settings_config.get("modelNames"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if !entry.model_id.trim().is_empty() && !entry.model_name.trim().is_empty() {
+        model_names.insert(entry.model_id.clone(), json!(entry.model_name));
+    }
+    let settings_config = json!({
+        "source": DATA_SOURCE,
+        "modelNames": model_names,
+    });
+    if existing.as_ref().is_some_and(|provider| {
+        provider.name == PROVIDER_NAME
+            && provider.settings_config == settings_config
+            && provider.category.as_deref() == Some("VS Code Copilot")
+            && provider.icon == icon
+            && provider.icon_color == entry.icon_color
+            && provider.website_url == entry.website_url
+            && provider.notes == entry.notes
+    }) {
         return Ok(());
     }
     let mut provider = Provider::with_id(
         PROVIDER_ID.to_string(),
         PROVIDER_NAME.to_string(),
-        json!({ "source": DATA_SOURCE }),
+        settings_config,
         None,
     );
     provider.category = Some("VS Code Copilot".to_string());
@@ -1876,6 +1888,10 @@ mod tests {
                 DATA_SOURCE.to_string()
             )
         );
+        drop(conn);
+        let logs = db.get_request_logs(&Default::default(), 0, 10)?;
+        assert_eq!(logs.data.len(), 1);
+        assert_eq!(logs.data[0].model_display_name.as_deref(), Some("GPT Test"));
         Ok(())
     }
 
@@ -1960,12 +1976,28 @@ mod tests {
         assert_eq!(row.4, "0");
         assert_eq!(row.5, "0");
         assert_eq!(provider_name, PROVIDER_NAME);
+        let settings_config: String = conn.query_row(
+            "SELECT settings_config FROM providers WHERE id = ?1 AND app_type = ?2",
+            rusqlite::params![PROVIDER_ID, APP_TYPE],
+            |provider_row| provider_row.get(0),
+        )?;
+        let settings_config: Value = serde_json::from_str(&settings_config).unwrap();
+        assert_eq!(
+            settings_config.pointer("/modelNames/gpt-5-mini"),
+            Some(&json!("GPT-5 mini"))
+        );
 
         // v5 could let the generic pricing backfill assign retail API cost to
         // official Copilot subscription traffic. Simulate that persisted state
-        // and prove the v6 cursor namespace forces a one-time corrective replay
+        // and prove the v7 cursor namespace forces a one-time corrective replay
         // even when the JSONL file itself has not changed.
         drop(conn);
+        let logs = db.get_request_logs(&Default::default(), 0, 10)?;
+        assert_eq!(logs.data.len(), 1);
+        assert_eq!(
+            logs.data[0].model_display_name.as_deref(),
+            Some("GPT-5 mini")
+        );
         {
             let conn = lock_conn!(db.conn);
             conn.execute(

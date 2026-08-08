@@ -2,6 +2,7 @@ use super::model::{is_managed_group, CopilotByokGroup};
 use super::store::{self, path_identity_key, CopilotByokCustomTarget, CopilotByokStore};
 use super::vscode::{discover_vscode_targets, VsCodeProfileTarget};
 use crate::error::AppError;
+use crate::file_transaction::FileSnapshot;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -104,6 +105,37 @@ fn custom_target_path(target: &CopilotByokCustomTarget) -> PathBuf {
     PathBuf::from(&target.language_models_path)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TargetResource {
+    LanguageModels,
+    PromptsHome,
+    Mcp,
+}
+
+fn custom_resource_path(
+    target: &CopilotByokCustomTarget,
+    resource: TargetResource,
+) -> Option<PathBuf> {
+    let language_models_path = custom_target_path(target);
+    match resource {
+        TargetResource::LanguageModels => Some(language_models_path),
+        TargetResource::PromptsHome => language_models_path
+            .parent()
+            .map(|directory| directory.join("prompts")),
+        TargetResource::Mcp => language_models_path
+            .parent()
+            .map(|directory| directory.join("mcp.json")),
+    }
+}
+
+fn detected_resource_path(target: &VsCodeProfileTarget, resource: TargetResource) -> PathBuf {
+    match resource {
+        TargetResource::LanguageModels => target.path(),
+        TargetResource::PromptsHome => target.prompts_home(),
+        TargetResource::Mcp => target.mcp_path(),
+    }
+}
+
 fn target_path_map(
     store: &CopilotByokStore,
     discovered: &[VsCodeProfileTarget],
@@ -138,8 +170,31 @@ pub(crate) fn resolve_target_paths(
     store: &CopilotByokStore,
     requested_ids: &[String],
 ) -> Result<Vec<(String, PathBuf)>, AppError> {
+    resolve_resource_paths(store, requested_ids, TargetResource::LanguageModels)
+}
+
+pub(crate) fn resolve_resource_paths(
+    store: &CopilotByokStore,
+    requested_ids: &[String],
+    resource: TargetResource,
+) -> Result<Vec<(String, PathBuf)>, AppError> {
     let discovered = discover_vscode_targets()?;
-    let paths = target_path_map(store, &discovered);
+    resolve_resource_paths_from_discovered(store, requested_ids, resource, &discovered)
+}
+
+pub(crate) fn resolve_resource_paths_from_discovered(
+    store: &CopilotByokStore,
+    requested_ids: &[String],
+    resource: TargetResource,
+    discovered: &[VsCodeProfileTarget],
+) -> Result<Vec<(String, PathBuf)>, AppError> {
+    let mut paths: HashMap<String, PathBuf> = discovered
+        .iter()
+        .map(|target| (target.id.clone(), detected_resource_path(target, resource)))
+        .collect();
+    paths.extend(store.custom_targets.iter().filter_map(|target| {
+        custom_resource_path(target, resource).map(|path| (target.id.clone(), path))
+    }));
     let mut seen_ids = HashSet::new();
     let mut seen_paths = HashSet::new();
     let mut resolved = Vec::new();
@@ -165,11 +220,6 @@ pub(crate) struct TransactionOverrides {
 }
 
 #[derive(Debug)]
-struct FileSnapshot {
-    contents: Option<Vec<u8>>,
-}
-
-#[derive(Debug)]
 struct TargetChange {
     path: PathBuf,
     before: FileSnapshot,
@@ -180,25 +230,11 @@ struct TargetChange {
 }
 
 fn snapshot_file(path: &Path) -> Result<FileSnapshot, AppError> {
-    if !path.exists() {
-        return Ok(FileSnapshot { contents: None });
-    }
-    ensure_regular_target(path)?;
-    ensure_file_size(path)?;
-    Ok(FileSnapshot {
-        contents: Some(fs::read(path).map_err(|error| AppError::io(path, error))?),
-    })
+    crate::file_transaction::snapshot_file(path, Some(MAX_CONFIG_BYTES), "Copilot BYOK config")
 }
 
 fn restore_snapshot(path: &Path, snapshot: &FileSnapshot) -> Result<(), AppError> {
-    match &snapshot.contents {
-        Some(contents) => crate::config::atomic_write(path, contents),
-        None if path.exists() => {
-            ensure_regular_target(path)?;
-            fs::remove_file(path).map_err(|error| AppError::io(path, error))
-        }
-        None => Ok(()),
-    }
+    crate::file_transaction::restore_snapshot(path, snapshot, "Copilot BYOK config")
 }
 
 fn rollback_changes(changes: &[TargetChange]) -> Result<(), AppError> {
@@ -593,7 +629,11 @@ mod tests {
             profile_name: "Default".to_string(),
             is_default: true,
             user_dir: format!("/{id}"),
-            language_models_path: format!("/{id}/chatLanguageModels.json"),
+            resources: super::super::vscode::VsCodeProfileResources {
+                language_models_path: format!("/{id}/chatLanguageModels.json"),
+                prompts_home: format!("/{id}/prompts"),
+                mcp_path: format!("/{id}/mcp.json"),
+            },
             config_exists: false,
             backup_exists: false,
         }
@@ -652,6 +692,47 @@ mod tests {
             effective_selected_target_ids(&store, &targets),
             vec!["insiders:default"]
         );
+    }
+
+    #[test]
+    fn deduplicates_each_profile_resource_independently() {
+        let default = target(
+            "stable:default",
+            super::super::vscode::VsCodeEdition::Stable,
+        );
+        let mut named = target(
+            "stable:profile:work",
+            super::super::vscode::VsCodeEdition::Stable,
+        );
+        named.is_default = false;
+        named.profile_id = Some("work".to_string());
+        named.profile_name = "Work".to_string();
+        named.resources.language_models_path = default.resources.language_models_path.clone();
+        let selected = vec![default.id.clone(), named.id.clone()];
+        let store = CopilotByokStore {
+            targets_initialized: true,
+            selected_target_ids: selected.clone(),
+            ..CopilotByokStore::default()
+        };
+        let discovered = vec![default, named];
+
+        let language_models = resolve_resource_paths_from_discovered(
+            &store,
+            &selected,
+            TargetResource::LanguageModels,
+            &discovered,
+        )
+        .expect("language model targets");
+        let prompts = resolve_resource_paths_from_discovered(
+            &store,
+            &selected,
+            TargetResource::PromptsHome,
+            &discovered,
+        )
+        .expect("prompt targets");
+
+        assert_eq!(language_models.len(), 1);
+        assert_eq!(prompts.len(), 2);
     }
 
     #[test]

@@ -1,11 +1,12 @@
 use indexmap::IndexMap;
 
 use crate::app_config::AppType;
-use crate::config::write_text_file;
 use crate::error::AppError;
+use crate::file_transaction::{commit_file_updates, FileUpdate};
 use crate::prompt::Prompt;
 use crate::prompt_files::{prompt_file_path, prompt_file_paths};
 use crate::store::AppState;
+use std::sync::Arc;
 
 /// 安全地获取当前 Unix 时间戳
 fn get_unix_timestamp() -> Result<i64, AppError> {
@@ -16,6 +17,20 @@ fn get_unix_timestamp() -> Result<i64, AppError> {
 }
 
 pub struct PromptService;
+
+fn write_prompt_targets(
+    target_paths: Vec<std::path::PathBuf>,
+    content: &str,
+    existing_only: bool,
+) -> Result<(), AppError> {
+    let contents: Arc<[u8]> = Arc::from(content.as_bytes());
+    let updates = target_paths
+        .into_iter()
+        .filter(|path| !existing_only || path.exists())
+        .map(|path| FileUpdate::write_shared(path, Arc::clone(&contents)))
+        .collect();
+    commit_file_updates(updates, None, "prompt file")
+}
 
 impl PromptService {
     pub fn get_prompts(
@@ -38,9 +53,7 @@ impl PromptService {
 
         if is_enabled {
             // 启用提示词：写入内容到文件
-            for target_path in prompt_file_paths(&app)? {
-                write_text_file(&target_path, &prompt.content)?;
-            }
+            write_prompt_targets(prompt_file_paths(&app)?, &prompt.content, false)?;
         } else {
             // 禁用提示词：检查是否还有其他已启用的提示词
             let prompts = state.db.get_prompts(app.as_str())?;
@@ -48,11 +61,7 @@ impl PromptService {
 
             if !any_enabled {
                 // 所有提示词都已禁用，清空文件
-                for target_path in prompt_file_paths(&app)? {
-                    if target_path.exists() {
-                        write_text_file(&target_path, "")?;
-                    }
-                }
+                write_prompt_targets(prompt_file_paths(&app)?, "", true)?;
             }
         }
 
@@ -136,9 +145,7 @@ impl PromptService {
 
         if let Some(prompt) = prompts.get_mut(id) {
             prompt.enabled = true;
-            for target_path in &target_paths {
-                write_text_file(target_path, &prompt.content)?; // 原子写入
-            }
+            write_prompt_targets(target_paths, &prompt.content, false)?;
             state.db.save_prompt(app.as_str(), prompt)?;
         } else {
             return Err(AppError::InvalidInput(format!("提示词 {id} 不存在")));

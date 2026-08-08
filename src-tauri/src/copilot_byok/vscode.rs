@@ -4,6 +4,8 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 const LANGUAGE_MODELS_FILE: &str = "chatLanguageModels.json";
+const PROMPTS_DIRECTORY: &str = "prompts";
+const MCP_FILE: &str = "mcp.json";
 const PROFILE_STORAGE_FILE: &str = "storage.json";
 const MAX_DISCOVERED_TARGETS: usize = 64;
 const MAX_PROFILE_STORAGE_BYTES: u64 = 8 * 1024 * 1024;
@@ -26,11 +28,39 @@ struct VsCodeStoredProfile {
     use_default_flags: Option<VsCodeUseDefaultFlags>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VsCodeUseDefaultFlags {
     #[serde(default)]
     language_models: bool,
+    #[serde(default)]
+    prompts: bool,
+    #[serde(default)]
+    mcp: bool,
+}
+
+impl VsCodeUseDefaultFlags {
+    fn agents_window() -> Self {
+        Self {
+            language_models: true,
+            prompts: true,
+            mcp: true,
+        }
+    }
+}
+
+fn effective_use_default_flags(
+    profile_location: &str,
+    stored: Option<VsCodeUseDefaultFlags>,
+) -> VsCodeUseDefaultFlags {
+    // VS Code overrides the stored flags for its built-in Agents window
+    // profile with AGENTS_WINDOW_PROFILE_FLAGS. Mirror the three resources CC
+    // Switch manages instead of trusting potentially absent/stale metadata.
+    if profile_location.replace('\\', "/") == "builtin/agents" {
+        VsCodeUseDefaultFlags::agents_window()
+    } else {
+        stored.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -58,6 +88,14 @@ impl VsCodeEdition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct VsCodeProfileResources {
+    pub language_models_path: String,
+    pub prompts_home: String,
+    pub mcp_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct VsCodeProfileTarget {
     pub id: String,
     pub edition: VsCodeEdition,
@@ -66,14 +104,22 @@ pub struct VsCodeProfileTarget {
     pub profile_name: String,
     pub is_default: bool,
     pub user_dir: String,
-    pub language_models_path: String,
+    pub resources: VsCodeProfileResources,
     pub config_exists: bool,
     pub backup_exists: bool,
 }
 
 impl VsCodeProfileTarget {
     pub fn path(&self) -> PathBuf {
-        PathBuf::from(&self.language_models_path)
+        PathBuf::from(&self.resources.language_models_path)
+    }
+
+    pub fn prompts_home(&self) -> PathBuf {
+        PathBuf::from(&self.resources.prompts_home)
+    }
+
+    pub fn mcp_path(&self) -> PathBuf {
+        PathBuf::from(&self.resources.mcp_path)
     }
 }
 
@@ -87,6 +133,7 @@ fn target(
     profile_id: Option<String>,
     profile_name: Option<String>,
     profile_dir: &Path,
+    use_default_flags: VsCodeUseDefaultFlags,
 ) -> VsCodeProfileTarget {
     let is_default = profile_id.is_none();
     let profile_name = profile_name.unwrap_or_else(|| "Default".to_string());
@@ -94,7 +141,23 @@ fn target(
         Some(profile_id) => format!("{}:profile:{profile_id}", edition.slug()),
         None => format!("{}:default", edition.slug()),
     };
-    let language_models_path = profile_dir.join(LANGUAGE_MODELS_FILE);
+    let inherits = |select: fn(&VsCodeUseDefaultFlags) -> bool| select(&use_default_flags);
+    let language_models_home = if inherits(|flags| flags.language_models) {
+        user_dir
+    } else {
+        profile_dir
+    };
+    let prompts_home = if inherits(|flags| flags.prompts) {
+        user_dir.join(PROMPTS_DIRECTORY)
+    } else {
+        profile_dir.join(PROMPTS_DIRECTORY)
+    };
+    let mcp_path = if inherits(|flags| flags.mcp) {
+        user_dir.join(MCP_FILE)
+    } else {
+        profile_dir.join(MCP_FILE)
+    };
+    let language_models_path = language_models_home.join(LANGUAGE_MODELS_FILE);
 
     VsCodeProfileTarget {
         id,
@@ -106,7 +169,11 @@ fn target(
         user_dir: user_dir.to_string_lossy().to_string(),
         config_exists: language_models_path.exists(),
         backup_exists: backup_path(&language_models_path).exists(),
-        language_models_path: language_models_path.to_string_lossy().to_string(),
+        resources: VsCodeProfileResources {
+            language_models_path: language_models_path.to_string_lossy().to_string(),
+            prompts_home: prompts_home.to_string_lossy().to_string(),
+            mcp_path: mcp_path.to_string_lossy().to_string(),
+        },
     }
 }
 
@@ -188,7 +255,14 @@ pub(crate) fn discover_from_roots(
             continue;
         }
 
-        targets.push(target(*edition, user_dir, None, None, user_dir));
+        targets.push(target(
+            *edition,
+            user_dir,
+            None,
+            None,
+            user_dir,
+            VsCodeUseDefaultFlags::default(),
+        ));
         if targets.len() >= MAX_DISCOVERED_TARGETS {
             break;
         }
@@ -214,13 +288,6 @@ pub(crate) fn discover_from_roots(
                 break;
             }
 
-            if profile
-                .use_default_flags
-                .as_ref()
-                .is_some_and(|flags| flags.language_models)
-            {
-                continue;
-            }
             let profile_id = profile.location.trim().to_string();
             let profile_name = profile.name.trim().to_string();
             if profile_id.is_empty() || profile_name.is_empty() {
@@ -229,6 +296,8 @@ pub(crate) fn discover_from_roots(
             let Some(profile_dir) = resolve_profile_dir(&profiles_dir, &profile_id) else {
                 continue;
             };
+            let use_default_flags =
+                effective_use_default_flags(&profile_id, profile.use_default_flags);
 
             targets.push(target(
                 *edition,
@@ -236,6 +305,7 @@ pub(crate) fn discover_from_roots(
                 Some(profile_id),
                 Some(profile_name),
                 &profile_dir,
+                use_default_flags,
             ));
         }
     }
@@ -280,7 +350,46 @@ mod tests {
     }
 
     #[test]
-    fn skips_profiles_that_inherit_default_language_models() {
+    fn resolves_each_profile_resource_inheritance_independently() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let user_dir = temp.path().join("Code").join("User");
+        let profile_dir = user_dir.join("profiles").join("models-shared");
+        let global_storage = user_dir.join("globalStorage");
+        fs::create_dir_all(&profile_dir).expect("create profile directory");
+        fs::create_dir_all(&global_storage).expect("create global storage directory");
+        fs::write(
+            global_storage.join(PROFILE_STORAGE_FILE),
+            r#"{
+                "userDataProfiles": [
+                    {
+                        "location": "models-shared",
+                        "name": "Models Shared",
+                        "useDefaultFlags": {
+                            "languageModels": true,
+                            "prompts": false,
+                            "mcp": false
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("write profile metadata");
+
+        let targets = discover_from_roots(&[(VsCodeEdition::Stable, user_dir.clone())])
+            .expect("discover targets");
+
+        assert_eq!(targets.len(), 2);
+        let profile = targets
+            .iter()
+            .find(|target| target.id == "stable:profile:models-shared")
+            .expect("named profile");
+        assert_eq!(profile.path(), user_dir.join(LANGUAGE_MODELS_FILE));
+        assert_eq!(profile.prompts_home(), profile_dir.join(PROMPTS_DIRECTORY));
+        assert_eq!(profile.mcp_path(), profile_dir.join(MCP_FILE));
+    }
+
+    #[test]
+    fn built_in_agents_profile_uses_vscode_forced_default_resources() {
         let temp = tempfile::tempdir().expect("temp directory");
         let user_dir = temp.path().join("Code").join("User");
         let agents_dir = user_dir.join("profiles").join("builtin").join("agents");
@@ -293,17 +402,62 @@ mod tests {
                 "userDataProfiles": [{
                     "location": "builtin/agents",
                     "name": "Agents",
-                    "useDefaultFlags": {"languageModels": true}
+                    "useDefaultFlags": {
+                        "languageModels": false,
+                        "prompts": false,
+                        "mcp": false
+                    }
                 }]
             }"#,
         )
         .expect("write profile metadata");
 
-        let targets =
-            discover_from_roots(&[(VsCodeEdition::Stable, user_dir)]).expect("discover targets");
+        let targets = discover_from_roots(&[(VsCodeEdition::Stable, user_dir.clone())])
+            .expect("discover targets");
+        let agents = targets
+            .iter()
+            .find(|target| target.id == "stable:profile:builtin/agents")
+            .expect("agents profile");
 
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].id, "stable:default");
+        assert_eq!(agents.path(), user_dir.join(LANGUAGE_MODELS_FILE));
+        assert_eq!(agents.prompts_home(), user_dir.join(PROMPTS_DIRECTORY));
+        assert_eq!(agents.mcp_path(), user_dir.join(MCP_FILE));
+    }
+
+    #[test]
+    fn inherited_prompts_and_mcp_do_not_follow_profile_language_models() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let user_dir = temp.path().join("Code").join("User");
+        let profile_dir = user_dir.join("profiles").join("work-profile");
+        let global_storage = user_dir.join("globalStorage");
+        fs::create_dir_all(&profile_dir).expect("create profile directory");
+        fs::create_dir_all(&global_storage).expect("create global storage directory");
+        fs::write(
+            global_storage.join(PROFILE_STORAGE_FILE),
+            r#"{
+                "userDataProfiles": [{
+                    "location": "work-profile",
+                    "name": "Work",
+                    "useDefaultFlags": {
+                        "languageModels": false,
+                        "prompts": true,
+                        "mcp": true
+                    }
+                }]
+            }"#,
+        )
+        .expect("write profile metadata");
+
+        let targets = discover_from_roots(&[(VsCodeEdition::Stable, user_dir.clone())])
+            .expect("discover targets");
+        let work = targets
+            .iter()
+            .find(|target| target.id == "stable:profile:work-profile")
+            .expect("work profile");
+
+        assert_eq!(work.path(), profile_dir.join(LANGUAGE_MODELS_FILE));
+        assert_eq!(work.prompts_home(), user_dir.join(PROMPTS_DIRECTORY));
+        assert_eq!(work.mcp_path(), user_dir.join(MCP_FILE));
     }
 
     #[test]

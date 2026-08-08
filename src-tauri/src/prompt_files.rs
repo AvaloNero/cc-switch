@@ -27,11 +27,10 @@ pub fn prompt_file_paths(app: &AppType) -> Result<Vec<PathBuf>, AppError> {
     }
 
     if matches!(app, AppType::CopilotByok) {
-        return crate::copilot_byok::selected_language_model_paths().map(|paths| {
+        return crate::copilot_byok::selected_prompt_homes().map(|paths| {
             paths
                 .into_iter()
-                .filter_map(|path| path.parent().map(PathBuf::from))
-                .map(|dir| dir.join("prompts").join("cc-switch.prompt.md"))
+                .map(|dir| dir.join("cc-switch.prompt.md"))
                 .collect()
         });
     }

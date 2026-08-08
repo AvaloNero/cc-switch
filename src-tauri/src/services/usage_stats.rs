@@ -131,6 +131,10 @@ pub struct RequestLogDetail {
     pub provider_name: Option<String>,
     pub app_type: String,
     pub model: String,
+    /// Optional human-readable name for the resolved model. The raw model id
+    /// remains in `model` for filtering, pricing, and diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_model: Option<String>,
     pub cost_multiplier: String,
@@ -178,6 +182,7 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         provider_name: row.get(2)?,
         app_type: row.get(3)?,
         model: row.get(4)?,
+        model_display_name: None,
         request_model: row.get(5)?,
         cost_multiplier: row
             .get::<_, Option<String>>(6)?
@@ -217,8 +222,60 @@ fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
          WHEN '_opencode_session' THEN 'OpenCode (Session)' \
          WHEN '_grok_session' THEN 'Grok Build (Session)' \
          WHEN 'vscode-copilot' THEN 'VSCode Copilot' \
-         ELSE {log_alias}.provider_id END)"
+        ELSE {log_alias}.provider_id END)"
     )
+}
+
+fn vscode_copilot_model_display_names(
+    conn: &Connection,
+) -> Result<HashMap<String, String>, AppError> {
+    let settings_config = conn
+        .query_row(
+            "SELECT settings_config FROM providers
+             WHERE id = 'vscode-copilot' AND app_type = 'copilot-byok'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| {
+            AppError::Database(format!("查询 VS Code Copilot 模型显示名称失败: {error}"))
+        })?;
+    let Some(settings_config) = settings_config else {
+        return Ok(HashMap::new());
+    };
+    // Display names are optional enrichment. A malformed legacy provider row
+    // must not make the entire request-log page unavailable.
+    let Ok(settings) = serde_json::from_str::<serde_json::Value>(&settings_config) else {
+        return Ok(HashMap::new());
+    };
+    let Some(model_names) = settings
+        .get("modelNames")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Ok(HashMap::new());
+    };
+
+    Ok(model_names
+        .iter()
+        .filter_map(|(model_id, value)| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(|name| (model_id.to_ascii_lowercase(), name.to_string()))
+        })
+        .collect())
+}
+
+fn apply_vscode_copilot_model_display_name(
+    log: &mut RequestLogDetail,
+    model_names: &HashMap<String, String>,
+) {
+    if log.app_type != "copilot-byok" || log.data_source.as_deref() != Some("vscode_session") {
+        return;
+    }
+
+    log.model_display_name = model_names.get(&log.model.to_ascii_lowercase()).cloned();
 }
 
 pub(crate) const SESSION_PROXY_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
@@ -1641,12 +1698,14 @@ impl Database {
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_refs.as_slice(), row_to_request_log_detail)?;
 
+        let vscode_model_names = vscode_copilot_model_display_names(&conn)?;
         let mut logs = Vec::new();
         let mut pricing_cache = HashMap::new();
 
         for row in rows {
             let mut log = row?;
             Self::maybe_backfill_log_costs(&conn, &mut log, &mut pricing_cache)?;
+            apply_vscode_copilot_model_display_name(&mut log, &vscode_model_names);
             logs.push(log);
         }
 
@@ -1684,6 +1743,8 @@ impl Database {
             Ok(mut detail) => {
                 let mut pricing_cache = HashMap::new();
                 Self::maybe_backfill_log_costs(&conn, &mut detail, &mut pricing_cache)?;
+                let vscode_model_names = vscode_copilot_model_display_names(&conn)?;
+                apply_vscode_copilot_model_display_name(&mut detail, &vscode_model_names);
                 Ok(Some(detail))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -2380,6 +2441,23 @@ fn should_try_pricing_prefix_match(model_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_vscode_model_display_names_do_not_break_usage_logs() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE providers (
+                id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                settings_config TEXT NOT NULL
+            );
+            INSERT INTO providers (id, app_type, settings_config)
+            VALUES ('vscode-copilot', 'copilot-byok', 'not valid json');",
+        )?;
+
+        assert!(vscode_copilot_model_display_names(&conn)?.is_empty());
+        Ok(())
+    }
 
     fn local_ts(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
         match Local.with_ymd_and_hms(year, month, day, hour, minute, second) {

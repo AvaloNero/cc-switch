@@ -6,6 +6,7 @@ import {
   type FormEvent,
 } from "react";
 import {
+  AlertCircle,
   ChevronRight,
   Download,
   Loader2,
@@ -26,6 +27,7 @@ import {
   PROVIDER_HEADER_DRAFT_PREFIX,
 } from "@/components/providers/forms/shared";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -165,6 +167,8 @@ export function CopilotByokGroupPanel({
     urlPlaceholder: t("copilotByok.form.urlPlaceholder"),
     apiType: t("copilotByok.form.apiType"),
     apiKey: t("copilotByok.form.apiKey"),
+    securityTitle: t("copilotByok.securityTitle"),
+    security: t("copilotByok.security"),
     sharedConnection: t("opencode.baseUrlHint"),
     headers: t("opencode.headers"),
     headersDescription: t("opencode.headersHint"),
@@ -535,6 +539,12 @@ export function CopilotByokGroupPanel({
           value={draft.apiKey}
           onChange={(value) => updateGroup("apiKey", value)}
         />
+
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>{copy.securityTitle}</AlertTitle>
+          <AlertDescription>{copy.security}</AlertDescription>
+        </Alert>
 
         <div className="space-y-2">
           <Label htmlFor="copilot-byok-url">{copy.url}</Label>

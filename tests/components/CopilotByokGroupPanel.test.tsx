@@ -77,6 +77,8 @@ describe("CopilotByokGroupPanel", () => {
     expect(
       screen.getByText("providerForm.customApiKeyHint"),
     ).toBeInTheDocument();
+    expect(screen.getByText("copilotByok.securityTitle")).toBeInTheDocument();
+    expect(screen.getByText("copilotByok.security")).toBeInTheDocument();
     expect(
       screen.queryByText("providerPreset.noSearchResults"),
     ).not.toBeInTheDocument();

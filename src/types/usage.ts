@@ -13,6 +13,8 @@ export interface RequestLog {
   providerName?: string;
   appType: string;
   model: string;
+  /** Human-readable resolved model name when the source provides one. */
+  modelDisplayName?: string;
   requestModel?: string;
   /** 写入时实际用于计价的模型名；路由接管 + request 计价模式下可能与 model 不同 */
   pricingModel?: string;

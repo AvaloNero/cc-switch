@@ -225,8 +225,7 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     normalized
 }
 
-pub(crate) fn normalize_language_models_path(path: &Path) -> Result<PathBuf, AppError> {
-    validate_language_models_path(path)?;
+fn normalize_path(path: &Path) -> Result<PathBuf, AppError> {
     let lexical = lexical_normalize(path);
     let mut ancestor = lexical.as_path();
     let mut tail = Vec::new();
@@ -252,8 +251,13 @@ pub(crate) fn normalize_language_models_path(path: &Path) -> Result<PathBuf, App
     Ok(strip_verbatim_prefix(lexical_normalize(&normalized)))
 }
 
+pub(crate) fn normalize_language_models_path(path: &Path) -> Result<PathBuf, AppError> {
+    validate_language_models_path(path)?;
+    normalize_path(path)
+}
+
 pub(crate) fn path_identity_key(path: &Path) -> String {
-    let normalized = normalize_language_models_path(path)
+    let normalized = normalize_path(path)
         .unwrap_or_else(|_| lexical_normalize(path))
         .to_string_lossy()
         .replace('\\', "/");
@@ -651,6 +655,18 @@ mod tests {
         let aliased = CopilotByokCustomTarget::from_path(aliased, None).unwrap();
         assert_eq!(direct.id, aliased.id);
         assert_eq!(direct.language_models_path, aliased.language_models_path);
+    }
+
+    #[test]
+    fn resource_identity_accepts_and_normalizes_non_model_paths() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let profile = temp.path().join("profile");
+        fs::create_dir_all(profile.join("nested")).expect("profile directory");
+
+        let direct = profile.join("prompts");
+        let aliased = profile.join("nested").join("..").join("prompts");
+
+        assert_eq!(path_identity_key(&direct), path_identity_key(&aliased));
     }
 
     #[test]

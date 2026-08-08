@@ -115,6 +115,7 @@ type View =
   | "universal"
   | "sessions"
   | "workspace"
+  | "copilotTargets"
   | "openclawEnv"
   | "openclawTools"
   | "openclawAgents"
@@ -165,6 +166,7 @@ const VALID_VIEWS: View[] = [
   "universal",
   "sessions",
   "workspace",
+  "copilotTargets",
   "openclawEnv",
   "openclawTools",
   "openclawAgents",
@@ -1024,6 +1026,14 @@ function App() {
           );
         case "workspace":
           return <WorkspaceFilesPanel />;
+        case "copilotTargets":
+          return (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden px-1 pb-12 pt-4">
+                <CopilotByokSettings mode="targets" />
+              </div>
+            </div>
+          );
         case "openclawEnv":
           return <EnvPanel />;
         case "openclawTools":
@@ -1264,6 +1274,7 @@ function App() {
                     })}
                   {currentView === "sessions" && t("sessionManager.title")}
                   {currentView === "workspace" && t("workspace.title")}
+                  {currentView === "copilotTargets" && t("copilotByok.targets")}
                   {currentView === "openclawEnv" && t("openclaw.env.title")}
                   {currentView === "openclawTools" && t("openclaw.tools.title")}
                   {currentView === "openclawAgents" &&
@@ -1306,15 +1317,13 @@ function App() {
                     setCurrentView("settings");
                   }}
                 />
-                {(isCurrentAppTakeoverActive ||
-                  activeApp === "copilot-byok") && (
+                {isCurrentAppTakeoverActive && (
                   <Button
                     variant="ghost"
                     size="icon"
                     onClick={() => {
                       setUsageDefaultFilter({
-                        appType:
-                          activeApp === "copilot-byok" ? "copilot-byok" : "all",
+                        appType: "all",
                         revision: Date.now(),
                       });
                       setSettingsDefaultTab("usage");
@@ -1638,6 +1647,19 @@ function App() {
                             </>
                           ) : (
                             <>
+                              {primaryToolbarApp === "copilot-byok" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    setCurrentView("copilotTargets")
+                                  }
+                                  className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
+                                  title={t("copilotByok.targets")}
+                                >
+                                  <Cpu className="w-4 h-4" />
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="sm"

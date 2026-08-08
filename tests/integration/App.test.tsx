@@ -250,7 +250,8 @@ describe("App integration with MSW", () => {
       "copilot-byok",
     );
     expect(screen.getByTestId("app-switcher")).toBeInTheDocument();
-    expect(document.querySelector('button[title="使用统计"]')).not.toBeNull();
+    expect(document.querySelector('button[title="使用统计"]')).toBeNull();
+    const syncTargetsButton = await screen.findByTitle("copilotByok.targets");
     for (const title of [
       "skills.manage",
       "prompts.manage",
@@ -259,6 +260,7 @@ describe("App integration with MSW", () => {
     ]) {
       expect(document.querySelector(`button[title="${title}"]`)).not.toBeNull();
     }
+    expect(syncTargetsButton.querySelector(".lucide-cpu")).not.toBeNull();
 
     const addByok = document.querySelector<HTMLButtonElement>(
       'button[aria-label="provider.addNewProvider"]',
@@ -267,27 +269,21 @@ describe("App integration with MSW", () => {
     fireEvent.click(addByok!);
     expect(copilotByokMocks.openAdd).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(
-      document.querySelector<HTMLButtonElement>('button[title="使用统计"]')!,
-    );
+    fireEvent.click(syncTargetsButton);
     await waitFor(() =>
-      expect(
-        screen.queryByTestId("copilot-byok-settings"),
-      ).not.toBeInTheDocument(),
-    );
-    expect(screen.getByTestId("settings-page")).toHaveAttribute(
-      "data-default-tab",
-      "usage",
-    );
-    expect(screen.getByTestId("settings-page")).toHaveAttribute(
-      "data-usage-app",
-      "copilot-byok",
+      expect(screen.getByTestId("copilot-byok-settings")).toHaveAttribute(
+        "data-mode",
+        "targets",
+      ),
     );
 
-    fireEvent.click(screen.getByText("close-settings"));
-    expect(
-      await screen.findByTestId("copilot-byok-settings"),
-    ).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.getByTestId("copilot-byok-settings")).toHaveAttribute(
+        "data-mode",
+        "catalog",
+      ),
+    );
 
     fireEvent.click(
       document.querySelector<HTMLButtonElement>(

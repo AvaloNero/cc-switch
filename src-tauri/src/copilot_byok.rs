@@ -157,10 +157,22 @@ fn operation_guard() -> Result<MutexGuard<'static, ()>, AppError> {
 /// Copilot management. Provider catalog data is portable, while these paths
 /// intentionally remain local to this device.
 pub(crate) fn selected_language_model_paths() -> Result<Vec<PathBuf>, AppError> {
+    selected_resource_paths(sync::TargetResource::LanguageModels)
+}
+
+pub(crate) fn selected_prompt_homes() -> Result<Vec<PathBuf>, AppError> {
+    selected_resource_paths(sync::TargetResource::PromptsHome)
+}
+
+pub(crate) fn selected_mcp_paths() -> Result<Vec<PathBuf>, AppError> {
+    selected_resource_paths(sync::TargetResource::Mcp)
+}
+
+fn selected_resource_paths(resource: sync::TargetResource) -> Result<Vec<PathBuf>, AppError> {
     let store = store::load_store()?;
     let discovered = vscode::discover_vscode_targets()?;
     let selected_ids = sync::effective_selected_target_ids(&store, &discovered);
-    sync::resolve_target_paths(&store, &selected_ids)
+    sync::resolve_resource_paths_from_discovered(&store, &selected_ids, resource, &discovered)
         .map(|targets| targets.into_iter().map(|(_, path)| path).collect())
 }
 
@@ -207,7 +219,7 @@ fn detected_target_state(
         profile_id: target.profile_id,
         profile_name: target.profile_name,
         is_default: target.is_default,
-        language_models_path: target.language_models_path,
+        language_models_path: target.resources.language_models_path,
         config_exists: target.config_exists,
         backup_exists: target.backup_exists,
         managed_group_count,
@@ -317,6 +329,15 @@ pub fn get_state(db: &Database) -> Result<CopilotByokState, AppError> {
 }
 
 pub fn sync_selected_on_startup(db: &Database) -> Result<(), AppError> {
+    sync_if_configured(db)
+}
+
+/// Sync Copilot BYOK when this device has at least one available selected
+/// target. Global synchronization calls this tolerant variant so users who do
+/// not use VS Code Copilot do not block unrelated provider, MCP, or Skill
+/// projections. Once a target is configured, real synchronization failures
+/// are still propagated to the caller.
+pub(crate) fn sync_if_configured(db: &Database) -> Result<(), AppError> {
     let _guard = operation_guard()?;
     let store = load_runtime_store(db)?;
     sync_if_selected(&store)
