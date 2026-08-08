@@ -15,14 +15,6 @@ fn default_api_type() -> String {
     "chat-completions".to_string()
 }
 
-fn default_context_window() -> u64 {
-    128_000
-}
-
-fn default_max_output_tokens() -> u64 {
-    8_192
-}
-
 fn is_vscode_secret_reference(value: &str) -> bool {
     value
         .strip_prefix("${input:")
@@ -39,20 +31,20 @@ pub struct CopilotByokModel {
     pub name: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default = "default_true")]
-    pub tool_calling: bool,
-    #[serde(default)]
-    pub vision: bool,
-    #[serde(default = "default_true")]
-    pub thinking: bool,
-    #[serde(default = "default_true")]
-    pub streaming: bool,
-    #[serde(default = "default_context_window")]
-    pub context_window: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calling: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streaming: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_input_tokens: Option<u64>,
-    #[serde(default = "default_max_output_tokens")]
-    pub max_output_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
     #[serde(default)]
     pub edit_tools: Vec<String>,
     #[serde(default)]
@@ -96,12 +88,9 @@ impl CopilotByokModel {
             .take()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        if self.context_window == 0 {
-            self.context_window = default_context_window();
-        }
-        if self.max_output_tokens == 0 {
-            self.max_output_tokens = default_max_output_tokens();
-        }
+        self.context_window = self.context_window.filter(|value| *value > 0);
+        self.max_input_tokens = self.max_input_tokens.filter(|value| *value > 0);
+        self.max_output_tokens = self.max_output_tokens.filter(|value| *value > 0);
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
@@ -120,8 +109,12 @@ impl CopilotByokModel {
                 "Copilot BYOK model options must be a JSON object".to_string(),
             ));
         }
-        if self.context_window > MAX_SAFE_JSON_INTEGER
-            || self.max_output_tokens > MAX_SAFE_JSON_INTEGER
+        if self
+            .context_window
+            .is_some_and(|value| value > MAX_SAFE_JSON_INTEGER)
+            || self
+                .max_output_tokens
+                .is_some_and(|value| value > MAX_SAFE_JSON_INTEGER)
             || self
                 .max_input_tokens
                 .is_some_and(|value| value > MAX_SAFE_JSON_INTEGER)
@@ -138,12 +131,24 @@ impl CopilotByokModel {
         model.insert("id".to_string(), json!(self.model_id));
         model.insert("name".to_string(), json!(self.name));
         model.insert("url".to_string(), json!(url));
-        model.insert("toolCalling".to_string(), json!(self.tool_calling));
-        model.insert("vision".to_string(), json!(self.vision));
-        model.insert("thinking".to_string(), json!(self.thinking));
-        model.insert("streaming".to_string(), json!(self.streaming));
-        model.insert("contextWindow".to_string(), json!(self.context_window));
-        model.insert("maxOutputTokens".to_string(), json!(self.max_output_tokens));
+        if let Some(tool_calling) = self.tool_calling {
+            model.insert("toolCalling".to_string(), json!(tool_calling));
+        }
+        if let Some(vision) = self.vision {
+            model.insert("vision".to_string(), json!(vision));
+        }
+        if let Some(thinking) = self.thinking {
+            model.insert("thinking".to_string(), json!(thinking));
+        }
+        if let Some(streaming) = self.streaming {
+            model.insert("streaming".to_string(), json!(streaming));
+        }
+        if let Some(context_window) = self.context_window {
+            model.insert("contextWindow".to_string(), json!(context_window));
+        }
+        if let Some(max_output_tokens) = self.max_output_tokens {
+            model.insert("maxOutputTokens".to_string(), json!(max_output_tokens));
+        }
         if let Some(max_input_tokens) = self.max_input_tokens {
             model.insert("maxInputTokens".to_string(), json!(max_input_tokens));
         }
@@ -446,13 +451,13 @@ mod tests {
             model_id: model_id.to_string(),
             name: name.to_string(),
             enabled: true,
-            tool_calling: true,
-            vision: false,
-            thinking: true,
-            streaming: true,
-            context_window: 262_144,
+            tool_calling: Some(true),
+            vision: Some(false),
+            thinking: Some(true),
+            streaming: Some(true),
+            context_window: Some(262_144),
             max_input_tokens: None,
-            max_output_tokens: 32_768,
+            max_output_tokens: Some(32_768),
             edit_tools: Vec::new(),
             zero_data_retention_enabled: false,
             supports_reasoning_effort: Vec::new(),
@@ -526,7 +531,7 @@ mod tests {
         assert!(invalid_options.validate().is_err());
 
         let mut unsafe_limit = group();
-        unsafe_limit.models[0].context_window = MAX_SAFE_JSON_INTEGER + 1;
+        unsafe_limit.models[0].context_window = Some(MAX_SAFE_JSON_INTEGER + 1);
         assert!(unsafe_limit.validate().is_err());
     }
 
@@ -558,6 +563,31 @@ mod tests {
         assert_eq!(rendered["models"][0]["zeroDataRetentionEnabled"], true);
         assert_eq!(rendered["models"][0]["supportsReasoningEffort"][0], "high");
         assert_eq!(rendered["ccSwitchManaged"], true);
+    }
+
+    #[test]
+    fn unknown_model_capabilities_are_not_invented() {
+        let mut value = group();
+        let model = &mut value.models[0];
+        model.tool_calling = None;
+        model.vision = None;
+        model.thinking = None;
+        model.streaming = None;
+        model.context_window = None;
+        model.max_output_tokens = None;
+
+        let rendered = value.to_language_model_group();
+        let model = &rendered["models"][0];
+        for field in [
+            "toolCalling",
+            "vision",
+            "thinking",
+            "streaming",
+            "contextWindow",
+            "maxOutputTokens",
+        ] {
+            assert!(model.get(field).is_none(), "unexpected field: {field}");
+        }
     }
 
     #[test]

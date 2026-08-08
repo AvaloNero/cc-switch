@@ -13,6 +13,7 @@ export interface DeepLinkImportRequest {
     | "gemini"
     | "grokbuild"
     | "opencode"
+    | "copilot-byok"
     | "openclaw"
     | "hermes";
   name?: string;

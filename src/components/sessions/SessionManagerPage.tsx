@@ -88,7 +88,8 @@ type ProviderFilter =
   | "opencode"
   | "openclaw"
   | "gemini"
-  | "hermes";
+  | "hermes"
+  | "copilot-byok";
 
 type SessionListViewMode = "flat" | "grouped";
 
@@ -1106,6 +1107,16 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                   size={14}
                                 />
                                 <span>OpenCode</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="copilot-byok">
+                              <div className="flex items-center gap-2">
+                                <ProviderIcon
+                                  icon="vscode-copilot-byok"
+                                  name="copilot-byok"
+                                  size={14}
+                                />
+                                <span>VS Code Copilot</span>
                               </div>
                             </SelectItem>
                             <SelectItem value="openclaw">

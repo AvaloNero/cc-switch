@@ -227,12 +227,8 @@ vi.mock("@/components/settings/DirectorySettings", () => ({
 }));
 
 vi.mock("@/components/settings/CopilotByokSettings", () => ({
-  CopilotByokSettings: ({ showHeader, targetsOnly }: any) => (
-    <div
-      data-testid="copilot-sync-targets"
-      data-show-header={String(showHeader)}
-      data-targets-only={String(targetsOnly)}
-    />
+  CopilotByokSettings: ({ mode }: any) => (
+    <div data-testid="copilot-sync-targets" data-mode={mode} />
   ),
 }));
 
@@ -460,8 +456,7 @@ describe("SettingsPage Component", () => {
     fireEvent.click(screen.getByText("settings.advanced.configDir.title"));
 
     const copilotTargets = screen.getByTestId("copilot-sync-targets");
-    expect(copilotTargets).toHaveAttribute("data-show-header", "false");
-    expect(copilotTargets).toHaveAttribute("data-targets-only", "true");
+    expect(copilotTargets).toHaveAttribute("data-mode", "targets");
 
     fireEvent.click(screen.getByText("browse-directory"));
     expect(settingsMock.browseDirectory).toHaveBeenCalledWith("claude");

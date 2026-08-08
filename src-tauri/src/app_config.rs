@@ -17,6 +17,13 @@ pub struct McpApps {
     pub grokbuild: bool,
     #[serde(default)]
     pub opencode: bool,
+    #[serde(
+        rename = "copilot-byok",
+        alias = "copilotByok",
+        alias = "vscode-copilot",
+        default
+    )]
+    pub copilot_byok: bool,
     #[serde(default)]
     pub hermes: bool,
 }
@@ -30,6 +37,7 @@ impl McpApps {
             AppType::Gemini => self.gemini,
             AppType::GrokBuild => self.grokbuild,
             AppType::OpenCode => self.opencode,
+            AppType::CopilotByok => self.copilot_byok,
             AppType::OpenClaw => false, // OpenClaw doesn't support MCP
             AppType::Hermes => self.hermes,
             AppType::ClaudeDesktop => false,
@@ -44,6 +52,7 @@ impl McpApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::GrokBuild => self.grokbuild = enabled,
             AppType::OpenCode => self.opencode = enabled,
+            AppType::CopilotByok => self.copilot_byok = enabled,
             AppType::OpenClaw => {} // OpenClaw doesn't support MCP, ignore
             AppType::Hermes => self.hermes = enabled,
             AppType::ClaudeDesktop => {} // Claude Desktop 3P provider config doesn't support MCP here
@@ -68,6 +77,9 @@ impl McpApps {
         if self.opencode {
             apps.push(AppType::OpenCode);
         }
+        if self.copilot_byok {
+            apps.push(AppType::CopilotByok);
+        }
         if self.hermes {
             apps.push(AppType::Hermes);
         }
@@ -81,6 +93,7 @@ impl McpApps {
             && !self.gemini
             && !self.grokbuild
             && !self.opencode
+            && !self.copilot_byok
             && !self.hermes
     }
 }
@@ -98,6 +111,13 @@ pub struct SkillApps {
     pub grokbuild: bool,
     #[serde(default)]
     pub opencode: bool,
+    #[serde(
+        rename = "copilot-byok",
+        alias = "copilotByok",
+        alias = "vscode-copilot",
+        default
+    )]
+    pub copilot_byok: bool,
     #[serde(default)]
     pub hermes: bool,
 }
@@ -111,6 +131,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini,
             AppType::GrokBuild => self.grokbuild,
             AppType::OpenCode => self.opencode,
+            AppType::CopilotByok => self.copilot_byok,
             AppType::Hermes => self.hermes,
             AppType::OpenClaw => false, // OpenClaw doesn't support Skills
             AppType::ClaudeDesktop => false,
@@ -125,6 +146,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::GrokBuild => self.grokbuild = enabled,
             AppType::OpenCode => self.opencode = enabled,
+            AppType::CopilotByok => self.copilot_byok = enabled,
             AppType::Hermes => self.hermes = enabled,
             AppType::OpenClaw => {} // OpenClaw doesn't support Skills, ignore
             AppType::ClaudeDesktop => {} // Claude Desktop 3P profiles don't use CC Switch skill sync
@@ -149,6 +171,9 @@ impl SkillApps {
         if self.opencode {
             apps.push(AppType::OpenCode);
         }
+        if self.copilot_byok {
+            apps.push(AppType::CopilotByok);
+        }
         if self.hermes {
             apps.push(AppType::Hermes);
         }
@@ -162,6 +187,7 @@ impl SkillApps {
             && !self.gemini
             && !self.grokbuild
             && !self.opencode
+            && !self.copilot_byok
             && !self.hermes
     }
 
@@ -300,6 +326,14 @@ pub struct McpRoot {
     /// OpenCode MCP 配置（v4.0.0+，实际使用 opencode.json）
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub opencode: McpConfig,
+    #[serde(
+        rename = "copilot-byok",
+        alias = "copilotByok",
+        alias = "vscode-copilot",
+        default,
+        skip_serializing_if = "McpConfig::is_empty"
+    )]
+    pub copilot_byok: McpConfig,
     /// OpenClaw MCP 配置（v4.1.0+，实际使用 openclaw.json）
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub openclaw: McpConfig,
@@ -320,6 +354,7 @@ impl Default for McpRoot {
             gemini: McpConfig::default(),
             grokbuild: McpConfig::default(),
             opencode: McpConfig::default(),
+            copilot_byok: McpConfig::default(),
             openclaw: McpConfig::default(),
             hermes: McpConfig::default(),
         }
@@ -353,6 +388,13 @@ pub struct PromptRoot {
     pub grokbuild: PromptConfig,
     #[serde(default)]
     pub opencode: PromptConfig,
+    #[serde(
+        rename = "copilot-byok",
+        alias = "copilotByok",
+        alias = "vscode-copilot",
+        default
+    )]
+    pub copilot_byok: PromptConfig,
     #[serde(default)]
     pub openclaw: PromptConfig,
     #[serde(default)]
@@ -379,6 +421,12 @@ pub enum AppType {
     Gemini,
     GrokBuild,
     OpenCode,
+    #[serde(
+        rename = "copilot-byok",
+        alias = "copilotByok",
+        alias = "vscode-copilot"
+    )]
+    CopilotByok,
     OpenClaw,
     Hermes,
 }
@@ -392,6 +440,7 @@ impl AppType {
             AppType::Gemini => "gemini",
             AppType::GrokBuild => "grokbuild",
             AppType::OpenCode => "opencode",
+            AppType::CopilotByok => "copilot-byok",
             AppType::OpenClaw => "openclaw",
             AppType::Hermes => "hermes",
         }
@@ -417,6 +466,7 @@ impl AppType {
             AppType::Gemini,
             AppType::GrokBuild,
             AppType::OpenCode,
+            AppType::CopilotByok,
             AppType::OpenClaw,
             AppType::Hermes,
         ]
@@ -436,12 +486,15 @@ impl FromStr for AppType {
             "gemini" => Ok(AppType::Gemini),
             "grokbuild" | "grok-build" | "grok_build" | "grok" => Ok(AppType::GrokBuild),
             "opencode" => Ok(AppType::OpenCode),
+            "copilot-byok" | "copilot_byok" | "copilotbyok" | "vscode-copilot" => {
+                Ok(AppType::CopilotByok)
+            }
             "openclaw" => Ok(AppType::OpenClaw),
             "hermes" => Ok(AppType::Hermes),
             other => Err(AppError::localized(
                 "unsupported_app",
-                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, gemini, grokbuild, opencode, openclaw, hermes。"),
-                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, gemini, grokbuild, opencode, openclaw, hermes."),
+                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, gemini, grokbuild, opencode, copilot-byok, openclaw, hermes。"),
+                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, gemini, grokbuild, opencode, copilot-byok, openclaw, hermes."),
             )),
         }
     }
@@ -479,6 +532,7 @@ impl CommonConfigSnippets {
             AppType::Gemini => self.gemini.as_ref(),
             AppType::GrokBuild => None,
             AppType::OpenCode => self.opencode.as_ref(),
+            AppType::CopilotByok => None,
             AppType::OpenClaw => self.openclaw.as_ref(),
             AppType::Hermes => self.hermes.as_ref(),
         }
@@ -493,6 +547,7 @@ impl CommonConfigSnippets {
             AppType::Gemini => self.gemini = snippet,
             AppType::GrokBuild => {}
             AppType::OpenCode => self.opencode = snippet,
+            AppType::CopilotByok => {}
             AppType::OpenClaw => self.openclaw = snippet,
             AppType::Hermes => self.hermes = snippet,
         }
@@ -700,6 +755,7 @@ impl MultiAppConfig {
             AppType::Gemini => &self.mcp.gemini,
             AppType::GrokBuild => &self.mcp.grokbuild,
             AppType::OpenCode => &self.mcp.opencode,
+            AppType::CopilotByok => &self.mcp.copilot_byok,
             AppType::OpenClaw => &self.mcp.openclaw,
             AppType::Hermes => &self.mcp.hermes,
         }
@@ -714,6 +770,7 @@ impl MultiAppConfig {
             AppType::Gemini => &mut self.mcp.gemini,
             AppType::GrokBuild => &mut self.mcp.grokbuild,
             AppType::OpenCode => &mut self.mcp.opencode,
+            AppType::CopilotByok => &mut self.mcp.copilot_byok,
             AppType::OpenClaw => &mut self.mcp.openclaw,
             AppType::Hermes => &mut self.mcp.hermes,
         }
@@ -844,6 +901,7 @@ impl MultiAppConfig {
             AppType::Gemini => &mut config.prompts.gemini.prompts,
             AppType::GrokBuild => &mut config.prompts.grokbuild.prompts,
             AppType::OpenCode => &mut config.prompts.opencode.prompts,
+            AppType::CopilotByok => &mut config.prompts.copilot_byok.prompts,
             AppType::OpenClaw => &mut config.prompts.openclaw.prompts,
             AppType::Hermes => &mut config.prompts.hermes.prompts,
         };
@@ -887,6 +945,7 @@ impl MultiAppConfig {
                 AppType::Gemini => &self.mcp.gemini.servers,
                 AppType::GrokBuild => continue,
                 AppType::OpenCode => &self.mcp.opencode.servers,
+                AppType::CopilotByok => continue,
                 AppType::OpenClaw => continue, // OpenClaw MCP is still in development, skip
                 AppType::Hermes => continue,   // Hermes didn't exist in v3.6.x, skip
             };

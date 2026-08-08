@@ -71,6 +71,7 @@ const createDefaultProviders = (): ProvidersByApp => ({
   },
   grokbuild: {},
   opencode: {},
+  "copilot-byok": {},
   openclaw: {},
   hermes: {},
 });
@@ -82,6 +83,7 @@ const createDefaultCurrent = (): CurrentProviderState => ({
   gemini: "gemini-1",
   grokbuild: "",
   opencode: "",
+  "copilot-byok": "",
   openclaw: "",
   hermes: "",
 });
@@ -195,6 +197,7 @@ let mcpConfigs: McpConfigState = {
   gemini: {},
   grokbuild: {},
   opencode: {},
+  "copilot-byok": {},
   openclaw: {},
   hermes: {},
 };
@@ -264,6 +267,7 @@ export const resetProviderState = () => {
     gemini: {},
     grokbuild: {},
     opencode: {},
+    "copilot-byok": {},
     openclaw: {},
     hermes: {},
   };

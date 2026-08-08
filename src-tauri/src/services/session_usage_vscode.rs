@@ -1463,7 +1463,7 @@ fn sync_from_roots(
 /// 是否启用 CC Switch 本地代理不影响此流程；VS Code 未写入 token 的请求不会猜测补算。
 pub fn sync_vscode_copilot_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     let normalized = sync_copilot_provider(db)?;
-    let groups = crate::copilot_byok::usage_catalog()?;
+    let groups = crate::copilot_byok::usage_catalog(db)?;
     let catalog = ByokCatalog::from_groups(&groups);
     let mut result = sync_from_roots(db, &default_vscode_user_dirs(), &catalog)?;
     result.imported = result.imported.saturating_add(normalized);
@@ -1845,7 +1845,7 @@ mod tests {
 
         let db = Database::memory()?;
         let catalog = ByokCatalog::from_groups(&[group("g-1", "Acme", "gpt-test", "GPT Test")]);
-        let first = sync_from_roots(&db, &[user_dir.clone()], &catalog)?;
+        let first = sync_from_roots(&db, std::slice::from_ref(&user_dir), &catalog)?;
         assert_eq!(first.imported, 1);
 
         let second = sync_from_roots(&db, &[user_dir], &catalog)?;
@@ -1928,7 +1928,7 @@ mod tests {
 
         let db = Database::memory()?;
         let catalog = ByokCatalog::from_groups(&[]);
-        let result = sync_from_roots(&db, &[user_dir.clone()], &catalog)?;
+        let result = sync_from_roots(&db, std::slice::from_ref(&user_dir), &catalog)?;
         assert_eq!(result.imported, 1);
 
         let conn = lock_conn!(db.conn);
@@ -2048,7 +2048,7 @@ mod tests {
         let db = Database::memory()?;
         let initial_catalog = ByokCatalog::from_groups(&[]);
         assert_eq!(
-            sync_from_roots(&db, &[user_dir.clone()], &initial_catalog)?.imported,
+            sync_from_roots(&db, std::slice::from_ref(&user_dir), &initial_catalog)?.imported,
             2
         );
 
@@ -2187,7 +2187,7 @@ mod tests {
 
         let db = Database::memory()?;
         let initial_catalog = ByokCatalog::from_groups(&[]);
-        let initial = sync_from_roots(&db, &[user_dir.clone()], &initial_catalog)?;
+        let initial = sync_from_roots(&db, std::slice::from_ref(&user_dir), &initial_catalog)?;
         assert!(initial.errors.is_empty());
         let (_, initial_fingerprint) = get_sync_state(&db, CATALOG_SYNC_KEY)?;
         assert_eq!(initial_fingerprint, initial_catalog.fingerprint);

@@ -2,7 +2,7 @@
 
 ## Behavior
 
-CC Switch exposes VS Code Copilot as a first-level application and manages its Custom Endpoint BYOK catalog in additive mode, similar to the OpenCode integration:
+CC Switch exposes VS Code Copilot as a first-level application and manages its Custom Endpoint BYOK catalog as portable provider data, similar to the OpenCode integration:
 
 - Each CC Switch BYOK provider is written as one `customendpoint` Group whose name is the configured provider name.
 - A Group owns one protocol mode, endpoint URL, API key, and request-header set, and can expose multiple models that all share that connection.
@@ -13,7 +13,7 @@ CC Switch exposes VS Code Copilot as a first-level application and manages its C
 - Stopping management removes CC Switch-owned groups and clears the selected profiles so later catalog edits do not add them back.
 - The manual sync action is retained as a repair/reconciliation operation.
 
-The app switcher opens a provider-only catalog as a primary page, matching the other managed applications instead of exposing profile and file-management controls there. Its toolbar exposes only actions that VS Code Copilot actually supports: Usage Statistics and add provider. It does not route Skills, Prompts, Sessions, or MCP actions to OpenCode. The add action opens the shared full-screen provider form with an expandable multi-model editor. VS Code Copilot is shown by default in Settings > General > Apps on Main Page and can be hidden or shown again there.
+The app switcher opens a provider-only catalog as a primary page, matching the other managed applications instead of exposing profile and file-management controls there. Its toolbar uses VS Code's real configuration locations for Skills, Prompt Files, Sessions, and MCP, and also exposes Usage Statistics and add provider. The add action opens the shared full-screen provider form with an expandable multi-model editor. VS Code Copilot is shown by default in Settings > General > Apps on Main Page and can be hidden or shown again there.
 
 Advanced Settings > Configuration Directories contains only the VS Code profile sync targets and their import, restore, resync, and stop-management actions. Provider cards and provider editing remain on the first-level application page.
 
@@ -29,7 +29,7 @@ Before the first write to an existing target, CC Switch creates:
 chatLanguageModels.json.cc-switch.bak
 ```
 
-The CC Switch catalog store is kept under the CC Switch application configuration directory. Catalog/store changes and all selected profile writes are committed as one operation: targets are preflighted first, and a failure restores every target, backup, and store snapshot.
+The portable provider catalog is stored in the normal CC Switch provider database under its own `copilot-byok-catalog` namespace, so database export, WebDAV, and S3 synchronization include it without colliding with the normalized `VSCode Copilot` usage provider. Selected VS Code editions/profiles and custom absolute paths remain in the device-local `copilot-byok.json` store and are intentionally excluded from portable catalog data. Catalog changes and all selected profile writes are committed as one operation: targets are preflighted first, the catalog replacement is atomic, and a later write failure restores every target, backup, and catalog snapshot.
 
 ## Existing configuration import
 
@@ -44,7 +44,7 @@ The CC Switch catalog store is kept under the CC Switch application configuratio
 
 ## Security model
 
-Credentials entered directly in CC Switch are materialized into each model's request headers in `chatLanguageModels.json`, because an external application cannot create the corresponding VS Code SecretStorage entry. Imported `${input:...}` SecretStorage references remain references and are not converted to plaintext. Protect both the VS Code configuration file and the CC Switch catalog store as credential-bearing files.
+Credentials entered directly in CC Switch are materialized into each model's request headers in `chatLanguageModels.json`, because an external application cannot create the corresponding VS Code SecretStorage entry. Imported `${input:...}` SecretStorage references remain references and are not converted to plaintext. Protect both the VS Code configuration file and the CC Switch database/backup files as credential-bearing files.
 
 The CC Switch store file is restricted to mode `0600` on Unix platforms.
 
@@ -88,5 +88,37 @@ cargo test --manifest-path src-tauri/Cargo.toml copilot_byok --lib
 ```
 
 The repository root intentionally has no `Cargo.toml`; always pass `--manifest-path src-tauri/Cargo.toml` to Cargo commands.
+
+On the Windows Codex desktop runtime, a fallback `pnpm` invocation can attempt dependency approval again and fail with `ERR_PNPM_IGNORED_BUILDS` even when the checked-out `node_modules` is already usable. Do not add generated `allowBuilds` placeholders to `pnpm-workspace.yaml`. For verification in that environment, invoke the repository-local binaries directly:
+
+```powershell
+.\node_modules\.bin\tsc.cmd --noEmit
+.\node_modules\.bin\prettier.cmd --check "src/**/*.{js,jsx,ts,tsx,css,json}"
+.\node_modules\.bin\vitest.cmd run
+npm run build:renderer
+.\node_modules\.bin\tauri.cmd build --bundles nsis --config src-tauri/tauri.codex-local-build.json
+```
+
+`tauri.codex-local-build.json` is a temporary, untracked local override with an empty
+`beforeBuildCommand` and `createUpdaterArtifacts: false`. It prevents Tauri from invoking the
+Codex Runtime's `pnpm install` fallback after the renderer has already been built, and avoids
+requiring the release-only updater signing key. Remove the override after the build and never
+commit it. The last command is still the formal NSIS desktop packaging path; a browser-only Vite
+server is not a substitute for a successful Tauri package build.
+
+The temporary override contains only:
+
+```json
+{
+  "build": { "beforeBuildCommand": "" },
+  "bundle": { "createUpdaterArtifacts": false, "targets": ["nsis"] }
+}
+```
+
+Before rebuilding, check whether a previous test launch is still running directly from
+`src-tauri/target/release/cc-switch.exe`. That exact process locks the linker output on Windows and
+causes `failed to remove file ... cc-switch.exe` / `os error 5`. Stop only the process whose
+resolved executable path matches that build output; do not terminate an installed CC Switch from
+`Program Files` or another directory.
 
 Also manually verify that first launch selects the Stable default profile, then verify explicit Stable/Insiders default and named-profile selection, inherited-profile filtering, preservation of user-owned groups, import conflict behavior, stop-management deselection, backup restore, explicit empty target selection, and repeated idempotent synchronization.

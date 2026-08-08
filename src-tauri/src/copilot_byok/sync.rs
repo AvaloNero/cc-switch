@@ -417,7 +417,7 @@ pub(crate) fn commit_store_update(
 
     if persist_store {
         let store_path = store::store_path();
-        if let Err(error) = store::save_store(after) {
+        if let Err(error) = store::save_device_store(after) {
             let target_rollback = rollback_changes(&changes);
             let store_rollback = store_snapshot.as_ref().map_or_else(
                 || {
@@ -557,13 +557,13 @@ mod tests {
                     model_id: id.to_string(),
                     name: id.to_string(),
                     enabled: true,
-                    tool_calling: true,
-                    vision: false,
-                    thinking: true,
-                    streaming: true,
-                    context_window: 262_144,
+                    tool_calling: Some(true),
+                    vision: Some(false),
+                    thinking: Some(true),
+                    streaming: Some(true),
+                    context_window: Some(262_144),
                     max_input_tokens: None,
-                    max_output_tokens: 32_768,
+                    max_output_tokens: Some(32_768),
                     edit_tools: Vec::new(),
                     zero_data_retention_enabled: false,
                     supports_reasoning_effort: Vec::new(),

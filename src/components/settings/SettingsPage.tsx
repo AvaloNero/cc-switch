@@ -367,10 +367,7 @@ export function SettingsPage({
                             onResetDirectory={resetDirectory}
                           />
                           <div className="mt-6 border-t border-border/50 pt-6">
-                            <CopilotByokSettings
-                              showHeader={false}
-                              targetsOnly
-                            />
+                            <CopilotByokSettings mode="targets" />
                           </div>
                         </AccordionContent>
                       </AccordionItem>

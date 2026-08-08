@@ -689,7 +689,10 @@ pub fn run() {
                 app_state.db.is_providers_empty().unwrap_or(false);
 
             for app_type in
-                crate::app_config::AppType::all().filter(|t| !t.is_additive_mode())
+                crate::app_config::AppType::all().filter(|t| {
+                    !t.is_additive_mode()
+                        && !matches!(t, crate::app_config::AppType::CopilotByok)
+                })
             {
                 if !crate::services::provider::should_import_default_config_on_startup(
                     &app_state,
@@ -835,7 +838,7 @@ pub fn run() {
             // not expose SecretStorage to external applications, so newer CC Switch
             // versions may need to repair derived per-model authentication headers
             // even when the catalog itself has not changed.
-            match crate::copilot_byok::sync_selected_on_startup() {
+            match crate::copilot_byok::sync_selected_on_startup(app_state.db.as_ref()) {
                 Ok(()) => log::debug!("✓ Synchronized Copilot BYOK profiles"),
                 Err(e) => log::warn!("✗ Failed to synchronize Copilot BYOK profiles: {e}"),
             }

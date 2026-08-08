@@ -21,16 +21,8 @@ describe("AppSwitcher", () => {
 
   it("treats VS Code Copilot as a primary switcher item after OpenCode", () => {
     const onSwitch = vi.fn();
-    const onOpenCopilot = vi.fn();
 
-    render(
-      <AppSwitcher
-        activeApp="claude"
-        copilotActive
-        onSwitch={onSwitch}
-        onOpenCopilot={onOpenCopilot}
-      />,
-    );
+    render(<AppSwitcher activeApp="copilot-byok" onSwitch={onSwitch} />);
 
     const copilot = screen.getByRole("button", {
       name: "VS Code Copilot",
@@ -47,7 +39,7 @@ describe("AppSwitcher", () => {
     ).toBeTruthy();
 
     fireEvent.click(copilot);
-    expect(onOpenCopilot).toHaveBeenCalledTimes(1);
+    expect(onSwitch).not.toHaveBeenCalled();
 
     fireEvent.click(claude);
     expect(onSwitch).toHaveBeenCalledWith("claude");
@@ -56,13 +48,7 @@ describe("AppSwitcher", () => {
   it("does not re-select the already active regular app", () => {
     const onSwitch = vi.fn();
 
-    render(
-      <AppSwitcher
-        activeApp="claude"
-        onSwitch={onSwitch}
-        onOpenCopilot={vi.fn()}
-      />,
-    );
+    render(<AppSwitcher activeApp="claude" onSwitch={onSwitch} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Claude Code" }));
     expect(onSwitch).not.toHaveBeenCalled();
@@ -73,7 +59,6 @@ describe("AppSwitcher", () => {
       <AppSwitcher
         activeApp="claude"
         onSwitch={vi.fn()}
-        onOpenCopilot={vi.fn()}
         visibleApps={{
           claude: true,
           "claude-desktop": true,

@@ -494,6 +494,7 @@ export interface McpApps {
   gemini: boolean;
   grokbuild?: boolean;
   opencode: boolean;
+  "copilot-byok"?: boolean;
   openclaw: boolean;
   hermes: boolean;
 }

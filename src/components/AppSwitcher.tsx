@@ -21,22 +21,18 @@ const APP_BADGE_ICON: Partial<
 
 interface AppSwitcherProps {
   activeApp: AppId;
-  copilotActive?: boolean;
   onSwitch: (app: AppId) => void;
-  onOpenCopilot: () => void;
   visibleApps?: VisibleApps;
 }
 
-type SwitcherItem = AppId | "copilotByok";
-
-const ALL_ITEMS: SwitcherItem[] = [
+const ALL_ITEMS: AppId[] = [
   "claude",
   "claude-desktop",
   "codex",
   "gemini",
   "grokbuild",
   "opencode",
-  "copilotByok",
+  "copilot-byok",
   "openclaw",
   "hermes",
 ];
@@ -49,6 +45,7 @@ const APP_ICON_NAME: Record<AppId, string> = {
   gemini: "gemini",
   grokbuild: "grok",
   opencode: "opencode",
+  "copilot-byok": "vscode-copilot-byok",
   openclaw: "openclaw",
   hermes: "hermes",
 };
@@ -60,11 +57,22 @@ const APP_DISPLAY_NAME: Record<AppId, string> = {
   gemini: "Gemini",
   grokbuild: "Grok Build",
   opencode: "OpenCode",
+  "copilot-byok": "VS Code Copilot",
   openclaw: "OpenClaw",
   hermes: "Hermes",
 };
 
 function AppGlyph({ app, isActive }: { app: AppId; isActive: boolean }) {
+  if (app === "copilot-byok") {
+    return (
+      <img
+        src={copilotByokIcon}
+        alt=""
+        aria-hidden="true"
+        className="h-5 w-5 shrink-0 rounded object-cover"
+      />
+    );
+  }
   const badgeConfig = APP_BADGE_ICON[app];
   const BadgeIcon = badgeConfig?.icon;
   return (
@@ -101,9 +109,7 @@ function AppGlyph({ app, isActive }: { app: AppId; isActive: boolean }) {
 
 export function AppSwitcher({
   activeApp,
-  copilotActive = false,
   onSwitch,
-  onOpenCopilot,
   visibleApps,
 }: AppSwitcherProps) {
   const { t } = useTranslation();
@@ -111,14 +117,16 @@ export function AppSwitcher({
   const [moreOpen, setMoreOpen] = useState(false);
 
   const handleSwitch = (app: AppId) => {
-    if (app === activeApp && !copilotActive) return;
+    if (app === activeApp) return;
     localStorage.setItem(STORAGE_KEY, app);
     onSwitch(app);
   };
 
   const itemsToShow = ALL_ITEMS.filter((item) => {
     if (!visibleApps) return true;
-    return visibleApps[item];
+    return item === "copilot-byok"
+      ? visibleApps.copilotByok
+      : visibleApps[item];
   });
   const itemCount = itemsToShow.length;
   const [visibleCount, setVisibleCount] = useState(itemCount);
@@ -161,8 +169,7 @@ export function AppSwitcher({
     return () => observer.disconnect();
   }, [itemCount]);
 
-  const activeItem: SwitcherItem = copilotActive ? "copilotByok" : activeApp;
-  const copilotLabel = t("apps.copilotByok");
+  const activeItem = activeApp;
   const visibleList = itemsToShow.slice(0, Math.max(1, visibleCount));
   if (itemsToShow.includes(activeItem) && !visibleList.includes(activeItem)) {
     visibleList[visibleList.length - 1] = activeItem;
@@ -178,32 +185,7 @@ export function AppSwitcher({
       style={{ WebkitAppRegion: "no-drag" } as any}
     >
       {visibleList.map((app) => {
-        if (app === "copilotByok") {
-          return (
-            <button
-              key={app}
-              type="button"
-              data-app-item
-              onClick={onOpenCopilot}
-              title={copilotLabel}
-              aria-label={copilotLabel}
-              className={cn(
-                "group inline-flex h-8 items-center rounded-md px-3 text-sm font-medium transition-all duration-200",
-                copilotActive
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
-              )}
-            >
-              <img
-                src={copilotByokIcon}
-                alt=""
-                aria-hidden="true"
-                className="h-5 w-5 shrink-0 rounded object-cover"
-              />
-            </button>
-          );
-        }
-        const isActive = activeApp === app && !copilotActive;
+        const isActive = activeApp === app;
         return (
           <button
             key={app}
@@ -248,30 +230,18 @@ export function AppSwitcher({
             className="z-[100] w-56 p-1"
           >
             {overflowList.map((app) => {
-              const isCopilot = app === "copilotByok";
               return (
                 <button
                   key={app}
                   type="button"
                   onClick={() => {
                     setMoreOpen(false);
-                    if (isCopilot) onOpenCopilot();
-                    else handleSwitch(app);
+                    handleSwitch(app);
                   }}
                   className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
-                  {isCopilot ? (
-                    <img
-                      src={copilotByokIcon}
-                      alt=""
-                      className="h-5 w-5 rounded object-cover"
-                    />
-                  ) : (
-                    <AppGlyph app={app} isActive={false} />
-                  )}
-                  <span className="truncate">
-                    {isCopilot ? copilotLabel : APP_DISPLAY_NAME[app]}
-                  </span>
+                  <AppGlyph app={app} isActive={false} />
+                  <span className="truncate">{APP_DISPLAY_NAME[app]}</span>
                 </button>
               );
             })}

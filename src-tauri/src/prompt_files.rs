@@ -10,6 +10,14 @@ use crate::opencode_config::get_opencode_dir;
 
 /// 返回指定应用所使用的提示词文件路径。
 pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
+    prompt_file_paths(app)?.into_iter().next().ok_or_else(|| {
+        AppError::Config("No prompt target is available for this application".to_string())
+    })
+}
+
+/// 返回指定应用的所有提示词同步目标。VS Code 的用户提示词属于 Profile，
+/// 因此需要同步到当前设备选中的全部 Profile。
+pub fn prompt_file_paths(app: &AppType) -> Result<Vec<PathBuf>, AppError> {
     if matches!(app, AppType::ClaudeDesktop) {
         return Err(AppError::localized(
             "app.prompts_unsupported",
@@ -18,12 +26,23 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         ));
     }
 
+    if matches!(app, AppType::CopilotByok) {
+        return crate::copilot_byok::selected_language_model_paths().map(|paths| {
+            paths
+                .into_iter()
+                .filter_map(|path| path.parent().map(PathBuf::from))
+                .map(|dir| dir.join("prompts").join("cc-switch.prompt.md"))
+                .collect()
+        });
+    }
+
     let base_dir: PathBuf = match app {
         AppType::Claude => get_base_dir_with_fallback(get_claude_settings_path(), ".claude")?,
         AppType::Codex => get_base_dir_with_fallback(get_codex_auth_path(), ".codex")?,
         AppType::Gemini => get_gemini_dir(),
         AppType::GrokBuild => crate::grok_config::get_grok_config_dir(),
         AppType::OpenCode => get_opencode_dir(),
+        AppType::CopilotByok => unreachable!("handled above"),
         AppType::OpenClaw => get_openclaw_dir(),
         AppType::Hermes => crate::hermes_config::get_hermes_dir(),
         AppType::ClaudeDesktop => unreachable!("handled above"),
@@ -34,26 +53,12 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::Codex => "AGENTS.md",
         AppType::Gemini => "GEMINI.md",
         AppType::GrokBuild | AppType::OpenCode | AppType::OpenClaw => "AGENTS.md",
+        AppType::CopilotByok => unreachable!("handled above"),
         AppType::Hermes => "SOUL.md",
         AppType::ClaudeDesktop => unreachable!("handled above"),
     };
 
-    Ok(base_dir.join(filename))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hermes_prompt_file_uses_soul_md() {
-        let path = prompt_file_path(&AppType::Hermes).expect("Hermes prompt path");
-
-        assert_eq!(
-            path.file_name().and_then(|name| name.to_str()),
-            Some("SOUL.md")
-        );
-    }
+    Ok(vec![base_dir.join(filename)])
 }
 
 fn get_base_dir_with_fallback(
@@ -71,4 +76,19 @@ fn get_base_dir_with_fallback(
                 format!("Cannot determine {fallback_dir} config directory: user home not found"),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hermes_prompt_file_uses_soul_md() {
+        let path = prompt_file_path(&AppType::Hermes).expect("Hermes prompt path");
+
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("SOUL.md")
+        );
+    }
 }

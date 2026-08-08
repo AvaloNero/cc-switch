@@ -4,7 +4,7 @@ use crate::app_config::AppType;
 use crate::config::write_text_file;
 use crate::error::AppError;
 use crate::prompt::Prompt;
-use crate::prompt_files::prompt_file_path;
+use crate::prompt_files::{prompt_file_path, prompt_file_paths};
 use crate::store::AppState;
 
 /// 安全地获取当前 Unix 时间戳
@@ -38,8 +38,9 @@ impl PromptService {
 
         if is_enabled {
             // 启用提示词：写入内容到文件
-            let target_path = prompt_file_path(&app)?;
-            write_text_file(&target_path, &prompt.content)?;
+            for target_path in prompt_file_paths(&app)? {
+                write_text_file(&target_path, &prompt.content)?;
+            }
         } else {
             // 禁用提示词：检查是否还有其他已启用的提示词
             let prompts = state.db.get_prompts(app.as_str())?;
@@ -47,9 +48,10 @@ impl PromptService {
 
             if !any_enabled {
                 // 所有提示词都已禁用，清空文件
-                let target_path = prompt_file_path(&app)?;
-                if target_path.exists() {
-                    write_text_file(&target_path, "")?;
+                for target_path in prompt_file_paths(&app)? {
+                    if target_path.exists() {
+                        write_text_file(&target_path, "")?;
+                    }
                 }
             }
         }
@@ -72,9 +74,14 @@ impl PromptService {
 
     pub fn enable_prompt(state: &AppState, app: AppType, id: &str) -> Result<(), AppError> {
         // 回填当前 live 文件内容到已启用的提示词，或创建备份
-        let target_path = prompt_file_path(&app)?;
+        let target_paths = prompt_file_paths(&app)?;
+        let target_path = target_paths
+            .iter()
+            .find(|path| path.exists())
+            .or_else(|| target_paths.first())
+            .ok_or_else(|| AppError::Config("No prompt target is available".to_string()))?;
         if target_path.exists() {
-            if let Ok(live_content) = std::fs::read_to_string(&target_path) {
+            if let Ok(live_content) = std::fs::read_to_string(target_path) {
                 if !live_content.trim().is_empty() {
                     let mut prompts = state.db.get_prompts(app.as_str())?;
 
@@ -129,7 +136,9 @@ impl PromptService {
 
         if let Some(prompt) = prompts.get_mut(id) {
             prompt.enabled = true;
-            write_text_file(&target_path, &prompt.content)?; // 原子写入
+            for target_path in &target_paths {
+                write_text_file(target_path, &prompt.content)?; // 原子写入
+            }
             state.db.save_prompt(app.as_str(), prompt)?;
         } else {
             return Err(AppError::InvalidInput(format!("提示词 {id} 不存在")));

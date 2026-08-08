@@ -58,7 +58,23 @@ const EDIT_TOOLS: CopilotByokEditTool[] = [
   "code-rewrite",
 ];
 
-type DraftModel = CopilotByokModel & {
+type DraftModel = Omit<
+  CopilotByokModel,
+  | "toolCalling"
+  | "vision"
+  | "thinking"
+  | "streaming"
+  | "contextWindow"
+  | "maxInputTokens"
+  | "maxOutputTokens"
+> & {
+  toolCalling: boolean | null;
+  vision: boolean | null;
+  thinking: boolean | null;
+  streaming: boolean | null;
+  contextWindow: number | null;
+  maxInputTokens: number | null;
+  maxOutputTokens: number | null;
   reasoningEffortsText: string;
   modelOptionsText: string;
 };
@@ -72,13 +88,13 @@ const emptyModel = (): DraftModel => ({
   modelId: "",
   name: "",
   enabled: true,
-  toolCalling: true,
-  vision: false,
-  thinking: true,
-  streaming: true,
-  contextWindow: 128000,
+  toolCalling: null,
+  vision: null,
+  thinking: null,
+  streaming: null,
+  contextWindow: null,
   maxInputTokens: null,
-  maxOutputTokens: 8192,
+  maxOutputTokens: null,
   editTools: [],
   zeroDataRetentionEnabled: false,
   supportsReasoningEffort: [],
@@ -112,6 +128,13 @@ function toDraft(group: CopilotByokGroup | null): DraftGroup {
     requestHeaders: structuredClone(group.requestHeaders ?? {}),
     models: group.models.map((model) => ({
       ...structuredClone(model),
+      toolCalling: model.toolCalling ?? null,
+      vision: model.vision ?? null,
+      thinking: model.thinking ?? null,
+      streaming: model.streaming ?? null,
+      contextWindow: model.contextWindow ?? null,
+      maxInputTokens: model.maxInputTokens ?? null,
+      maxOutputTokens: model.maxOutputTokens ?? null,
       reasoningEffortsText: model.supportsReasoningEffort.join(", "),
       modelOptionsText: JSON.stringify(model.modelOptions ?? {}, null, 2),
     })),
@@ -335,9 +358,10 @@ export function CopilotByokGroupPanel({
         : model.editTools.filter((item) => item !== tool),
     );
 
-  const parsePositiveInteger = (value: string, fallback: number): number => {
+  const parsePositiveInteger = (value: string): number | null => {
+    if (!value.trim()) return null;
     const parsed = Number(value);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
   };
 
   const parseObject = (text: string): Record<string, unknown> => {
@@ -663,15 +687,13 @@ export function CopilotByokGroupPanel({
                           <Input
                             type="number"
                             min={1}
-                            value={model.contextWindow}
+                            value={model.contextWindow ?? ""}
+                            placeholder={copy.automatic}
                             onChange={(event) =>
                               updateModel(
                                 model.id,
                                 "contextWindow",
-                                parsePositiveInteger(
-                                  event.target.value,
-                                  128000,
-                                ),
+                                parsePositiveInteger(event.target.value),
                               )
                             }
                           />
@@ -690,7 +712,7 @@ export function CopilotByokGroupPanel({
                                 model.id,
                                 "maxInputTokens",
                                 event.target.value
-                                  ? parsePositiveInteger(event.target.value, 1)
+                                  ? parsePositiveInteger(event.target.value)
                                   : null,
                               )
                             }
@@ -703,12 +725,13 @@ export function CopilotByokGroupPanel({
                           <Input
                             type="number"
                             min={1}
-                            value={model.maxOutputTokens}
+                            value={model.maxOutputTokens ?? ""}
+                            placeholder={copy.automatic}
                             onChange={(event) =>
                               updateModel(
                                 model.id,
                                 "maxOutputTokens",
-                                parsePositiveInteger(event.target.value, 8192),
+                                parsePositiveInteger(event.target.value),
                               )
                             }
                           />
@@ -736,7 +759,7 @@ export function CopilotByokGroupPanel({
                           >
                             <span>{label}</span>
                             <Switch
-                              checked={model[key]}
+                              checked={model[key] ?? false}
                               onCheckedChange={(checked) =>
                                 updateModel(model.id, key, checked)
                               }

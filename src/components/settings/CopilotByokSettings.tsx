@@ -30,12 +30,10 @@ import {
   Download,
   GripVertical,
   Loader2,
-  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
   Search,
-  ShieldAlert,
   Trash2,
   Unplug,
   X,
@@ -48,7 +46,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
 import { ProviderActions } from "@/components/providers/ProviderActions";
 import { ProviderIcon } from "@/components/ProviderIcon";
@@ -59,7 +56,6 @@ import type {
   CopilotByokState,
   CopilotByokTargetState,
 } from "@/lib/api";
-import copilotByokIcon from "@/assets/icons/vscode-copilot-byok.png";
 import { cn } from "@/lib/utils";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { CopilotByokGroupPanel } from "./CopilotByokGroupPanel";
@@ -78,10 +74,7 @@ type BusyAction =
   | null;
 
 interface CopilotByokSettingsProps {
-  showHeader?: boolean;
-  catalogOnly?: boolean;
-  targetsOnly?: boolean;
-  onOpenUsage?: () => void;
+  mode: "catalog" | "targets";
   onOpenWebsite?: (url: string) => void;
 }
 
@@ -109,7 +102,6 @@ interface SortableCopilotGroupCardProps {
   onEdit: () => void;
   onDuplicate: () => void;
   onTest: () => void;
-  onOpenUsage?: () => void;
   onDelete: () => void;
   onOpenWebsite?: (url: string) => void;
 }
@@ -123,7 +115,6 @@ function SortableCopilotGroupCard({
   onEdit,
   onDuplicate,
   onTest,
-  onOpenUsage,
   onDelete,
   onOpenWebsite,
 }: SortableCopilotGroupCardProps) {
@@ -223,8 +214,6 @@ function SortableCopilotGroupCard({
             onEdit={onEdit}
             onDuplicate={onDuplicate}
             onTest={onTest}
-            onConfigureUsage={onOpenUsage}
-            configureUsageTitle={t("usage.title")}
             onDelete={onDelete}
           />
         </div>
@@ -236,17 +225,9 @@ function SortableCopilotGroupCard({
 export const CopilotByokSettings = forwardRef<
   CopilotByokSettingsHandle,
   CopilotByokSettingsProps
->(function CopilotByokSettings(
-  {
-    showHeader = true,
-    catalogOnly = false,
-    targetsOnly = false,
-    onOpenUsage,
-    onOpenWebsite,
-  },
-  ref,
-) {
+>(function CopilotByokSettings({ mode, onOpenWebsite }, ref) {
   const { t } = useTranslation();
+  const catalogOnly = mode === "catalog";
   const copy = {
     title: t("apps.copilotByok"),
     description: t("copilotByok.description"),
@@ -842,7 +823,6 @@ export const CopilotByokSettings = forwardRef<
                       }}
                       onDuplicate={() => void duplicateGroup(group)}
                       onTest={() => void testGroup(group)}
-                      onOpenUsage={onOpenUsage}
                       onDelete={() => void deleteGroup(group)}
                       onOpenWebsite={onOpenWebsite}
                     />
@@ -860,55 +840,6 @@ export const CopilotByokSettings = forwardRef<
 
   return (
     <div className="space-y-3">
-      {showHeader ? (
-        <div className="flex items-start justify-between gap-4 rounded-xl border border-blue-500/60 bg-card p-4 shadow-sm shadow-blue-500/10">
-          <div className="flex min-w-0 items-start gap-3">
-            <img
-              src={copilotByokIcon}
-              alt={copy.title}
-              className="h-8 w-8 shrink-0 rounded-lg border border-border bg-muted object-cover"
-            />
-            <div className="min-w-0 space-y-1">
-              <h2 className="text-base font-semibold leading-none">
-                {copy.title}
-              </h2>
-              <p className="max-w-3xl text-xs leading-5 text-muted-foreground">
-                {copy.description}
-              </p>
-            </div>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => load(true)}
-            disabled={Boolean(busy)}
-            className="h-8 shrink-0 px-2.5 text-xs text-muted-foreground"
-          >
-            <RefreshCw
-              className={`mr-1.5 h-3.5 w-3.5 ${busy === "load" ? "animate-spin" : ""}`}
-            />
-            {copy.refresh}
-          </Button>
-        </div>
-      ) : null}
-
-      {!targetsOnly ? (
-        <div
-          role="alert"
-          className="flex gap-3 rounded-xl border border-destructive/25 bg-destructive/[0.04] p-4"
-        >
-          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-          <div className="min-w-0">
-            <p className="text-[13px] font-medium leading-5 text-destructive">
-              {copy.securityTitle}
-            </p>
-            <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
-              {copy.security}
-            </p>
-          </div>
-        </div>
-      ) : null}
-
       {selectedTargets.length === 0 ? (
         <div className="flex gap-3 rounded-xl border border-border bg-card p-4">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -1113,146 +1044,11 @@ export const CopilotByokSettings = forwardRef<
         </div>
       </section>
 
-      {!targetsOnly ? (
-        <section
-          aria-labelledby="copilot-byok-models"
-          className="overflow-hidden rounded-xl border border-border bg-card"
-        >
-          <div className="flex items-start justify-between gap-4 border-b border-border/60 px-4 py-4">
-            <div>
-              <h3
-                id="copilot-byok-models"
-                className="text-base font-semibold leading-none"
-              >
-                {copy.models}
-              </h3>
-              <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
-                {copy.modelsDescription}
-              </p>
-            </div>
-            <Button
-              size="sm"
-              onClick={openAdd}
-              disabled={Boolean(busy)}
-              className="h-8 shrink-0 text-xs"
-            >
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              {copy.addModel}
-            </Button>
-          </div>
-
-          <div className="divide-y divide-border/60">
-            {state.groups.length === 0 ? (
-              <p className="px-5 py-8 text-center text-[13px] leading-5 text-muted-foreground">
-                {copy.noModels}
-              </p>
-            ) : (
-              state.groups.map((group) => {
-                const enabledModels = group.models.filter(
-                  (model) => model.enabled,
-                ).length;
-                return (
-                  <div key={group.id} className="px-5 py-5">
-                    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-[13px] font-medium leading-5">
-                            {group.name}
-                          </span>
-                          <Badge
-                            variant={group.enabled ? "secondary" : "outline"}
-                            className="h-5 px-1.5 text-[10px] font-medium"
-                          >
-                            {group.enabled ? copy.enabled : copy.disabled}
-                          </Badge>
-                          <Badge
-                            variant="outline"
-                            className="h-5 px-1.5 text-[10px] font-medium"
-                          >
-                            {group.apiType}
-                          </Badge>
-                          <Badge
-                            variant="outline"
-                            className="h-5 px-1.5 text-[10px] font-medium"
-                          >
-                            {enabledModels}/{group.models.length}{" "}
-                            {copy.modelCount}
-                          </Badge>
-                        </div>
-                        <p className="mt-1.5 break-all font-mono text-[11px] leading-4 text-muted-foreground">
-                          {group.url}
-                        </p>
-                        <div className="mt-3 flex flex-wrap gap-1.5">
-                          {group.models.map((model) => (
-                            <span
-                              key={model.id}
-                              className={
-                                model.enabled
-                                  ? "rounded-md bg-muted px-2 py-1 text-[11px] text-foreground"
-                                  : "rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground line-through"
-                              }
-                              title={model.modelId}
-                            >
-                              {model.name}
-                              <span className="ml-1 font-mono text-[10px] text-muted-foreground">
-                                {model.modelId}
-                              </span>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <Switch
-                          checked={group.enabled}
-                          disabled={Boolean(busy)}
-                          onCheckedChange={(checked) =>
-                            void toggleGroup(group, checked)
-                          }
-                          aria-label={`${group.name} ${copy.enabled}`}
-                        />
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={Boolean(busy)}
-                          onClick={() => {
-                            setEditingGroup(group);
-                            setEditorOpen(true);
-                          }}
-                          className="h-8 text-xs text-muted-foreground"
-                        >
-                          <Pencil className="mr-2 h-3.5 w-3.5" />
-                          {copy.edit}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={Boolean(busy)}
-                          onClick={() => void deleteGroup(group)}
-                          className="h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        >
-                          <Trash2 className="mr-2 h-3.5 w-3.5" />
-                          {copy.delete}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </section>
-      ) : null}
-
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap gap-4 text-[12px] text-muted-foreground">
           <span>
             {copy.selectedProfiles}: {selectedTargets.length}
           </span>
-          {!targetsOnly ? (
-            <span>
-              {copy.enabledModels}: {state.managedModelCount}
-            </span>
-          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -1286,7 +1082,6 @@ export const CopilotByokSettings = forwardRef<
         </div>
       </div>
 
-      {!targetsOnly ? groupEditor : null}
       {confirmationDialogs}
     </div>
   );

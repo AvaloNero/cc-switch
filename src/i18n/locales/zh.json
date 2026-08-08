@@ -893,7 +893,8 @@
     "opencode": "OpenCode",
     "openclaw": "OpenClaw",
     "hermes": "Hermes",
-    "copilotByok": "VS Code Copilot"
+    "copilotByok": "VS Code Copilot",
+    "copilot-byok": "VS Code Copilot"
   },
   "appSwitcher": {
     "more": "更多应用"

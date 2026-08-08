@@ -3487,6 +3487,7 @@ impl ProviderService {
             AppType::Gemini => Self::extract_gemini_common_config(&provider.settings_config),
             AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(&provider.settings_config),
+            AppType::CopilotByok => Ok(String::new()),
             AppType::OpenClaw => Self::extract_openclaw_common_config(&provider.settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
         }
@@ -3504,6 +3505,7 @@ impl ProviderService {
             AppType::Gemini => Self::extract_gemini_common_config(settings_config),
             AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(settings_config),
+            AppType::CopilotByok => Ok(String::new()),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
         }
@@ -4250,6 +4252,16 @@ impl ProviderService {
                     ));
                 }
             }
+            AppType::CopilotByok => {
+                let mut group: crate::copilot_byok::CopilotByokGroup =
+                    serde_json::from_value(provider.settings_config.clone()).map_err(|error| {
+                        AppError::InvalidInput(format!(
+                            "Invalid VS Code Copilot provider configuration: {error}"
+                        ))
+                    })?;
+                group.normalize();
+                group.validate()?;
+            }
             AppType::OpenClaw => {
                 // OpenClaw uses config structure: { baseUrl, apiKey, api, models }
                 // Basic validation - must be an object
@@ -4473,6 +4485,21 @@ impl ProviderService {
                     .unwrap_or("")
                     .to_string();
 
+                Ok((api_key, base_url))
+            }
+            AppType::CopilotByok => {
+                let api_key = provider
+                    .settings_config
+                    .get("apiKey")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let base_url = provider
+                    .settings_config
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
                 Ok((api_key, base_url))
             }
             AppType::OpenClaw | AppType::Hermes => {

@@ -153,7 +153,7 @@ describe("CopilotByokSettings", () => {
   });
 
   it("loads with the VS Code default profile selected", async () => {
-    render(<CopilotByokSettings />);
+    render(<CopilotByokSettings mode="targets" />);
 
     expect(await screen.findByRole("checkbox")).toBeChecked();
     expect(
@@ -164,7 +164,7 @@ describe("CopilotByokSettings", () => {
 
   it("clears target selection when stopping management", async () => {
     mocks.getState.mockResolvedValue(state(true));
-    render(<CopilotByokSettings />);
+    render(<CopilotByokSettings mode="targets" />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -175,13 +175,12 @@ describe("CopilotByokSettings", () => {
 
     await waitFor(() => expect(mocks.setTargets).toHaveBeenCalledWith([]));
     expect(screen.getByText("当前未管理任何 Profile")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "刷新" })).not.toBeDisabled();
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
   });
 
   it("shows only provider cards in catalog mode", async () => {
     mocks.getState.mockResolvedValue({ ...state(true), groups: [group] });
-    const onOpenUsage = vi.fn();
-    render(<CopilotByokSettings catalogOnly onOpenUsage={onOpenUsage} />);
+    render(<CopilotByokSettings mode="catalog" />);
 
     expect(await screen.findByText("Moonshot")).toBeInTheDocument();
     expect(
@@ -195,9 +194,7 @@ describe("CopilotByokSettings", () => {
     expect(screen.getByTitle("编辑")).toBeInTheDocument();
     expect(screen.getByTitle("复制")).toBeInTheDocument();
     expect(screen.getByTitle("检测连通")).toBeInTheDocument();
-    expect(screen.getByTitle("使用统计")).toBeInTheDocument();
-    fireEvent.click(screen.getByTitle("使用统计"));
-    expect(onOpenUsage).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTitle("使用统计")).not.toBeInTheDocument();
     expect(screen.getByTitle("删除")).toBeInTheDocument();
     expect(screen.queryByText("同步目标")).not.toBeInTheDocument();
     expect(screen.queryByText("API Key 存储提示")).not.toBeInTheDocument();
@@ -208,7 +205,7 @@ describe("CopilotByokSettings", () => {
 
   it("shows only sync targets in advanced configuration directories", async () => {
     mocks.getState.mockResolvedValue({ ...state(true), groups: [group] });
-    render(<CopilotByokSettings showHeader={false} targetsOnly />);
+    render(<CopilotByokSettings mode="targets" />);
 
     expect(await screen.findByText("同步目标")).toBeInTheDocument();
     expect(screen.queryByText("Moonshot")).not.toBeInTheDocument();
@@ -219,7 +216,7 @@ describe("CopilotByokSettings", () => {
   });
 
   it("reuses the standard empty state and imports the selected VS Code config", async () => {
-    render(<CopilotByokSettings catalogOnly />);
+    render(<CopilotByokSettings mode="catalog" />);
 
     expect(await screen.findByText("还没有添加任何供应商")).toBeInTheDocument();
     expect(

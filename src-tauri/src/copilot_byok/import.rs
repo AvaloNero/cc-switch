@@ -7,8 +7,6 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
-const DEFAULT_CONTEXT_WINDOW: u64 = 128_000;
-const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 8_192;
 const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +18,13 @@ pub struct CopilotByokImportResult {
     pub skipped_group_count: usize,
     pub changed_target_count: usize,
     pub warnings: Vec<String>,
+}
+
+pub(crate) struct PreparedImport {
+    pub result: CopilotByokImportResult,
+    pub original_store: CopilotByokStore,
+    pub updated_store: CopilotByokStore,
+    pub overrides: sync::TransactionOverrides,
 }
 
 fn value_string(value: Option<&Value>) -> Option<String> {
@@ -157,14 +162,13 @@ fn parse_model(
         model_id,
         name,
         enabled: true,
-        tool_calling: value_bool(object.get("toolCalling"), false),
-        vision: value_bool(object.get("vision"), false),
-        thinking: value_bool(object.get("thinking"), false),
-        streaming: value_bool(object.get("streaming"), true),
-        context_window: value_u64(object.get("contextWindow")).unwrap_or(DEFAULT_CONTEXT_WINDOW),
+        tool_calling: object.get("toolCalling").and_then(Value::as_bool),
+        vision: object.get("vision").and_then(Value::as_bool),
+        thinking: object.get("thinking").and_then(Value::as_bool),
+        streaming: object.get("streaming").and_then(Value::as_bool),
+        context_window: value_u64(object.get("contextWindow")),
         max_input_tokens: value_u64(object.get("maxInputTokens")),
-        max_output_tokens: value_u64(object.get("maxOutputTokens"))
-            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
+        max_output_tokens: value_u64(object.get("maxOutputTokens")),
         edit_tools: string_array(object.get("editTools"), "editTools")?,
         zero_data_retention_enabled: value_bool(object.get("zeroDataRetentionEnabled"), false),
         supports_reasoning_effort: string_array(
@@ -379,10 +383,10 @@ fn add_group(
     Ok((imported, 0))
 }
 
-pub fn import_from_target(
+pub fn prepare_import_from_target(
     mut store: CopilotByokStore,
     target_id: &str,
-) -> Result<CopilotByokImportResult, AppError> {
+) -> Result<PreparedImport, AppError> {
     let original_store = store.clone();
     let resolved = sync::resolve_target_paths(&store, &[target_id.to_string()])?;
     let (_, path) = resolved
@@ -433,14 +437,19 @@ pub fn import_from_target(
     }
 
     if accepted_indexes.is_empty() {
-        return Ok(CopilotByokImportResult {
-            target_id: target_id.to_string(),
-            imported_group_count,
-            imported_model_count,
-            reused_model_count,
-            skipped_group_count,
-            changed_target_count: 0,
-            warnings,
+        return Ok(PreparedImport {
+            result: CopilotByokImportResult {
+                target_id: target_id.to_string(),
+                imported_group_count,
+                imported_model_count,
+                reused_model_count,
+                skipped_group_count,
+                changed_target_count: 0,
+                warnings,
+            },
+            updated_store: store,
+            original_store,
+            overrides: sync::TransactionOverrides::default(),
         });
     }
 
@@ -457,16 +466,19 @@ pub fn import_from_target(
     overrides
         .base_groups
         .insert(target_id.to_string(), unmanaged);
-    let sync_result = sync::commit_store_update(&original_store, &store, overrides, true)?;
-
-    Ok(CopilotByokImportResult {
-        target_id: target_id.to_string(),
-        imported_group_count,
-        imported_model_count,
-        reused_model_count,
-        skipped_group_count,
-        changed_target_count: sync_result.changed_target_count,
-        warnings,
+    Ok(PreparedImport {
+        result: CopilotByokImportResult {
+            target_id: target_id.to_string(),
+            imported_group_count,
+            imported_model_count,
+            reused_model_count,
+            skipped_group_count,
+            changed_target_count: 0,
+            warnings,
+        },
+        original_store,
+        updated_store: store,
+        overrides,
     })
 }
 
@@ -514,10 +526,14 @@ mod tests {
             vec!["low", "high"]
         );
         assert!(parsed.models[0].zero_data_retention_enabled);
+        assert_eq!(parsed.models[0].tool_calling, Some(true));
+        assert_eq!(parsed.models[1].tool_calling, None);
+        assert_eq!(parsed.models[1].context_window, None);
 
         let rendered = parsed.to_language_model_group();
         assert_eq!(rendered["apiKey"], "${input:chat.lm.secret.test}");
         assert!(rendered["models"][0].get("requestHeaders").is_none());
+        assert!(rendered["models"][1].get("toolCalling").is_none());
     }
 
     #[test]

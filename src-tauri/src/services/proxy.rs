@@ -739,6 +739,11 @@ impl ProxyService {
     /// - 关闭：仅恢复当前 app 的 Live 配置；若无其它接管，则自动停止代理服务
     pub async fn set_takeover_for_app(&self, app_type: &str, enabled: bool) -> Result<(), String> {
         let app = AppType::from_str(app_type).map_err(|e| format!("无效的应用类型: {e}"))?;
+        if matches!(app, AppType::CopilotByok) {
+            return Err(
+                "VS Code Copilot 使用原生 Custom Endpoint 配置，不支持本地代理接管。".to_string(),
+            );
+        }
         let app_type_str = app.as_str();
         let _guard = self.switch_locks.lock_for_app(app_type_str).await;
 
@@ -3229,6 +3234,20 @@ mod tests {
     use serial_test::serial;
     use std::env;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn vscode_copilot_rejects_proxy_takeover_before_starting_server() {
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db);
+
+        let error = service
+            .set_takeover_for_app("copilot-byok", true)
+            .await
+            .expect_err("Copilot takeover must be rejected");
+
+        assert!(error.contains("不支持本地代理接管"));
+        assert!(!service.is_running().await);
+    }
 
     struct TempHome {
         #[allow(dead_code)]

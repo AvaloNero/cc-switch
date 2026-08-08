@@ -125,14 +125,13 @@ vi.mock("@/components/ConfirmDialog", () => ({
 }));
 
 vi.mock("@/components/AppSwitcher", () => ({
-  AppSwitcher: ({ activeApp, copilotActive, onSwitch, onOpenCopilot }: any) => (
+  AppSwitcher: ({ activeApp, onSwitch }: any) => (
     <div data-testid="app-switcher">
       <span>{activeApp}</span>
-      <span data-testid="copilot-active">{String(copilotActive)}</span>
       <button onClick={() => onSwitch("claude")}>switch-claude</button>
       <button onClick={() => onSwitch("codex")}>switch-codex</button>
       <button onClick={() => onSwitch("openclaw")}>switch-openclaw</button>
-      <button onClick={onOpenCopilot}>open-copilot</button>
+      <button onClick={() => onSwitch("copilot-byok")}>switch-copilot</button>
     </div>
   ),
 }));
@@ -143,12 +142,7 @@ vi.mock("@/components/settings/CopilotByokSettings", async () => {
     React.useImperativeHandle(ref, () => ({
       openAdd: copilotByokMocks.openAdd,
     }));
-    return (
-      <div
-        data-testid="copilot-byok-settings"
-        data-catalog-only={String(props.catalogOnly === true)}
-      />
-    );
+    return <div data-testid="copilot-byok-settings" data-mode={props.mode} />;
   });
   MockCopilotByokSettings.displayName = "MockCopilotByokSettings";
   return { CopilotByokSettings: MockCopilotByokSettings };
@@ -164,6 +158,12 @@ vi.mock("@/components/settings/SettingsPage", () => ({
     >
       <button onClick={() => onOpenChange(false)}>close-settings</button>
     </div>
+  ),
+}));
+
+vi.mock("@/components/sessions/SessionManagerPage", () => ({
+  SessionManagerPage: ({ appId }: { appId: string }) => (
+    <div data-testid="session-manager-page" data-app-id={appId} />
   ),
 }));
 
@@ -237,16 +237,18 @@ describe("App integration with MSW", () => {
     renderApp(App);
 
     fireEvent.click(await screen.findByText("switch-openclaw"));
-    fireEvent.click(await screen.findByText("open-copilot"));
+    fireEvent.click(await screen.findByText("switch-copilot"));
 
     expect(
       await screen.findByTestId("copilot-byok-settings"),
     ).toBeInTheDocument();
     expect(screen.getByTestId("copilot-byok-settings")).toHaveAttribute(
-      "data-catalog-only",
-      "true",
+      "data-mode",
+      "catalog",
     );
-    expect(screen.getByTestId("copilot-active")).toHaveTextContent("true");
+    expect(screen.getByTestId("app-switcher")).toHaveTextContent(
+      "copilot-byok",
+    );
     expect(screen.getByTestId("app-switcher")).toBeInTheDocument();
     expect(document.querySelector('button[title="使用统计"]')).not.toBeNull();
     for (const title of [
@@ -255,7 +257,7 @@ describe("App integration with MSW", () => {
       "sessionManager.title",
       "mcp.title",
     ]) {
-      expect(document.querySelector(`button[title="${title}"]`)).toBeNull();
+      expect(document.querySelector(`button[title="${title}"]`)).not.toBeNull();
     }
 
     const addByok = document.querySelector<HTMLButtonElement>(
@@ -286,6 +288,16 @@ describe("App integration with MSW", () => {
     expect(
       await screen.findByTestId("copilot-byok-settings"),
     ).toBeInTheDocument();
+
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>(
+        'button[title="sessionManager.title"]',
+      )!,
+    );
+    expect(await screen.findByTestId("session-manager-page")).toHaveAttribute(
+      "data-app-id",
+      "copilot-byok",
+    );
   }, 10_000);
 
   it("covers basic provider flows via real hooks", async () => {

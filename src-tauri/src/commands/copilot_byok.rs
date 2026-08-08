@@ -6,56 +6,78 @@ use crate::store::AppState;
 use tauri::State;
 
 #[tauri::command]
-pub fn copilot_byok_get_state() -> Result<CopilotByokState, String> {
-    copilot_byok::get_state().map_err(Into::into)
+pub fn copilot_byok_get_state(state: State<'_, AppState>) -> Result<CopilotByokState, String> {
+    copilot_byok::get_state(state.db.as_ref()).map_err(Into::into)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn copilot_byok_set_targets(target_ids: Vec<String>) -> Result<CopilotByokState, String> {
-    copilot_byok::set_targets(target_ids).map_err(Into::into)
+pub fn copilot_byok_set_targets(
+    state: State<'_, AppState>,
+    target_ids: Vec<String>,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::set_targets(state.db.as_ref(), target_ids).map_err(Into::into)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn copilot_byok_add_custom_target(
+    state: State<'_, AppState>,
     path: String,
     name: Option<String>,
 ) -> Result<CopilotByokState, String> {
-    copilot_byok::add_custom_target(path, name).map_err(Into::into)
+    copilot_byok::add_custom_target(state.db.as_ref(), path, name).map_err(Into::into)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn copilot_byok_remove_custom_target(target_id: String) -> Result<CopilotByokState, String> {
-    copilot_byok::remove_custom_target(&target_id).map_err(Into::into)
+pub fn copilot_byok_remove_custom_target(
+    state: State<'_, AppState>,
+    target_id: String,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::remove_custom_target(state.db.as_ref(), &target_id).map_err(Into::into)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn copilot_byok_upsert_group(group: CopilotByokGroup) -> Result<CopilotByokState, String> {
-    copilot_byok::upsert_group(group).map_err(Into::into)
+pub fn copilot_byok_upsert_group(
+    state: State<'_, AppState>,
+    group: CopilotByokGroup,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::upsert_group(state.db.as_ref(), group).map_err(Into::into)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn copilot_byok_delete_group(group_id: String) -> Result<CopilotByokState, String> {
-    copilot_byok::delete_group(&group_id).map_err(Into::into)
+pub fn copilot_byok_delete_group(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::delete_group(state.db.as_ref(), &group_id).map_err(Into::into)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn copilot_byok_reorder_groups(group_ids: Vec<String>) -> Result<CopilotByokState, String> {
-    copilot_byok::reorder_groups(group_ids).map_err(Into::into)
+pub fn copilot_byok_reorder_groups(
+    state: State<'_, AppState>,
+    group_ids: Vec<String>,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::reorder_groups(state.db.as_ref(), group_ids).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn copilot_byok_sync() -> Result<CopilotByokSyncResult, String> {
-    copilot_byok::sync().map_err(Into::into)
+pub fn copilot_byok_sync(state: State<'_, AppState>) -> Result<CopilotByokSyncResult, String> {
+    copilot_byok::sync(state.db.as_ref()).map_err(Into::into)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn copilot_byok_import_models(target_id: String) -> Result<CopilotByokImportResult, String> {
-    copilot_byok::import_models(&target_id).map_err(Into::into)
+pub fn copilot_byok_import_models(
+    state: State<'_, AppState>,
+    target_id: String,
+) -> Result<CopilotByokImportResult, String> {
+    copilot_byok::import_models(state.db.as_ref(), &target_id).map_err(Into::into)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn copilot_byok_restore_backup(target_id: String) -> Result<bool, String> {
-    copilot_byok::restore_backup(&target_id).map_err(Into::into)
+pub fn copilot_byok_restore_backup(
+    state: State<'_, AppState>,
+    target_id: String,
+) -> Result<bool, String> {
+    copilot_byok::restore_backup(state.db.as_ref(), &target_id).map_err(Into::into)
 }
 
 /// 只检查供应商 Base URL 是否可达，不调用模型列表或真实推理接口。
@@ -64,7 +86,7 @@ pub async fn copilot_byok_check_connection(
     state: State<'_, AppState>,
     group_id: String,
 ) -> Result<StreamCheckResult, String> {
-    let group = copilot_byok::usage_catalog()
+    let group = copilot_byok::usage_catalog(state.db.as_ref())
         .map_err(String::from)?
         .into_iter()
         .find(|group| group.id == group_id)

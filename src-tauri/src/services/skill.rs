@@ -555,6 +555,7 @@ impl SkillService {
                     return Ok(custom.join("skills"));
                 }
             }
+            AppType::CopilotByok => {}
             AppType::OpenClaw => {
                 if let Some(custom) = crate::settings::get_openclaw_override_dir() {
                     return Ok(custom.join("skills"));
@@ -579,6 +580,7 @@ impl SkillService {
             AppType::Gemini => home.join(".gemini").join("skills"),
             AppType::GrokBuild => home.join(".grok").join("skills"),
             AppType::OpenCode => home.join(".config").join("opencode").join("skills"),
+            AppType::CopilotByok => home.join(".copilot").join("skills"),
             AppType::OpenClaw => home.join(".openclaw").join("skills"),
             AppType::Hermes => crate::hermes_config::get_hermes_dir().join("skills"),
         })

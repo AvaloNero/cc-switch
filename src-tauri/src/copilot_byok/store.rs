@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const STORE_FILE: &str = "copilot-byok.json";
-const STORE_VERSION: u32 = 5;
+const STORE_VERSION: u32 = 6;
 const MAX_TARGETS: usize = 64;
 const MAX_GROUPS: usize = 256;
 const MAX_MODELS: usize = 256;
@@ -68,7 +68,7 @@ pub struct CopilotByokStore {
     pub selected_target_ids: Vec<String>,
     #[serde(default)]
     pub custom_targets: Vec<CopilotByokCustomTarget>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<CopilotByokGroup>,
 }
 
@@ -169,13 +169,13 @@ impl LegacyModel {
                 model_id: self.model_id,
                 name: self.name,
                 enabled: true,
-                tool_calling: self.tool_calling,
-                vision: self.vision,
-                thinking: self.thinking,
-                streaming: self.streaming,
-                context_window: self.context_window,
+                tool_calling: Some(self.tool_calling),
+                vision: Some(self.vision),
+                thinking: Some(self.thinking),
+                streaming: Some(self.streaming),
+                context_window: Some(self.context_window),
                 max_input_tokens: self.max_input_tokens,
-                max_output_tokens: self.max_output_tokens,
+                max_output_tokens: Some(self.max_output_tokens),
                 edit_tools: self.edit_tools,
                 zero_data_retention_enabled: self.zero_data_retention_enabled,
                 supports_reasoning_effort: self.supports_reasoning_effort,
@@ -539,6 +539,14 @@ pub fn save_store(store: &CopilotByokStore) -> Result<(), AppError> {
             .map_err(|error| AppError::io(&path, error))?;
     }
     Ok(())
+}
+
+/// Persist only device-local VS Code targets. The provider catalog lives in
+/// the main database so normal export and cloud synchronization include it.
+pub fn save_device_store(store: &CopilotByokStore) -> Result<(), AppError> {
+    let mut local = store.clone();
+    local.groups.clear();
+    save_store(&local)
 }
 
 pub(crate) fn apply_group_order(

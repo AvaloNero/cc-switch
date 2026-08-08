@@ -893,6 +893,7 @@
     "grokbuild": "Grok Build",
     "opencode": "OpenCode",
     "copilotByok": "VS Code Copilot",
+    "copilot-byok": "VS Code Copilot",
     "openclaw": "OpenClaw",
     "hermes": "Hermes"
   },

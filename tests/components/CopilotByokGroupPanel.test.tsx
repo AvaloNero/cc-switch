@@ -55,7 +55,7 @@ describe("CopilotByokGroupPanel", () => {
     mocks.fetchModelsForConfig.mockReset();
     mocks.showFetchModelsError.mockReset();
     mocks.fetchModelsForConfig.mockResolvedValue([
-      { id: "kimi-k2", ownedBy: "Moonshot" },
+      { id: "kimi-k2", name: "Kimi K2", ownedBy: "Moonshot" },
     ]);
   });
 
@@ -119,7 +119,7 @@ describe("CopilotByokGroupPanel", () => {
       "copilotByok.form.modelNamePlaceholder",
     );
     expect(firstModelId).toHaveValue("kimi-k2");
-    expect(firstModelName).toHaveValue("kimi-k2");
+    expect(firstModelName).toHaveValue("Kimi K2");
     expect(screen.queryByText("opencode.modelLimits")).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "opencode.toggleModelDetails" }),
@@ -143,9 +143,6 @@ describe("CopilotByokGroupPanel", () => {
       },
     );
 
-    fireEvent.change(firstModelName, {
-      target: { value: "Kimi K2" },
-    });
     fireEvent.click(screen.getByRole("button", { name: "opencode.addModel" }));
 
     const modelIds = screen.getAllByPlaceholderText(
@@ -175,10 +172,10 @@ describe("CopilotByokGroupPanel", () => {
           expect.objectContaining({
             modelId: "kimi-k2",
             name: "Kimi K2",
-            contextWindow: 128000,
-            maxOutputTokens: 8192,
-            toolCalling: true,
-            streaming: true,
+            contextWindow: null,
+            maxOutputTokens: null,
+            toolCalling: null,
+            streaming: null,
           }),
           expect.objectContaining({ modelId: "kimi-k3", name: "Kimi K3" }),
         ],
