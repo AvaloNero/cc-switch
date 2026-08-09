@@ -1,9 +1,29 @@
+use crate::app_config::AppType;
 use crate::copilot_byok::{
     self, CopilotByokGroup, CopilotByokImportResult, CopilotByokState, CopilotByokSyncResult,
 };
 use crate::services::stream_check::{StreamCheckResult, StreamCheckService};
+use crate::services::{McpService, PromptService};
 use crate::store::AppState;
 use tauri::State;
+
+fn reproject_shared_resources(state: &AppState) -> Result<(), String> {
+    McpService::sync_enabled_for_app(state, &AppType::CopilotByok).map_err(String::from)?;
+
+    let prompts =
+        PromptService::get_prompts(state, AppType::CopilotByok).map_err(String::from)?;
+    if let Some(prompt) = prompts.values().find(|prompt| prompt.enabled) {
+        PromptService::upsert_prompt(
+            state,
+            AppType::CopilotByok,
+            &prompt.id,
+            prompt.clone(),
+        )
+        .map_err(String::from)?;
+    }
+
+    Ok(())
+}
 
 #[tauri::command]
 pub fn copilot_byok_get_state(state: State<'_, AppState>) -> Result<CopilotByokState, String> {
@@ -15,7 +35,9 @@ pub fn copilot_byok_set_targets(
     state: State<'_, AppState>,
     target_ids: Vec<String>,
 ) -> Result<CopilotByokState, String> {
-    copilot_byok::set_targets(state.db.as_ref(), target_ids).map_err(Into::into)
+    let updated = copilot_byok::set_targets(state.db.as_ref(), target_ids).map_err(String::from)?;
+    reproject_shared_resources(state.inner())?;
+    Ok(updated)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -24,7 +46,10 @@ pub fn copilot_byok_add_custom_target(
     path: String,
     name: Option<String>,
 ) -> Result<CopilotByokState, String> {
-    copilot_byok::add_custom_target(state.db.as_ref(), path, name).map_err(Into::into)
+    let updated =
+        copilot_byok::add_custom_target(state.db.as_ref(), path, name).map_err(String::from)?;
+    reproject_shared_resources(state.inner())?;
+    Ok(updated)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -32,7 +57,10 @@ pub fn copilot_byok_remove_custom_target(
     state: State<'_, AppState>,
     target_id: String,
 ) -> Result<CopilotByokState, String> {
-    copilot_byok::remove_custom_target(state.db.as_ref(), &target_id).map_err(Into::into)
+    let updated = copilot_byok::remove_custom_target(state.db.as_ref(), &target_id)
+        .map_err(String::from)?;
+    reproject_shared_resources(state.inner())?;
+    Ok(updated)
 }
 
 #[tauri::command(rename_all = "camelCase")]
