@@ -10,16 +10,10 @@ use tauri::State;
 fn reproject_shared_resources(state: &AppState) -> Result<(), String> {
     McpService::sync_enabled_for_app(state, &AppType::CopilotByok).map_err(String::from)?;
 
-    let prompts =
-        PromptService::get_prompts(state, AppType::CopilotByok).map_err(String::from)?;
+    let prompts = PromptService::get_prompts(state, AppType::CopilotByok).map_err(String::from)?;
     if let Some(prompt) = prompts.values().find(|prompt| prompt.enabled) {
-        PromptService::upsert_prompt(
-            state,
-            AppType::CopilotByok,
-            &prompt.id,
-            prompt.clone(),
-        )
-        .map_err(String::from)?;
+        PromptService::upsert_prompt(state, AppType::CopilotByok, &prompt.id, prompt.clone())
+            .map_err(String::from)?;
     }
 
     Ok(())
@@ -57,8 +51,8 @@ pub fn copilot_byok_remove_custom_target(
     state: State<'_, AppState>,
     target_id: String,
 ) -> Result<CopilotByokState, String> {
-    let updated = copilot_byok::remove_custom_target(state.db.as_ref(), &target_id)
-        .map_err(String::from)?;
+    let updated =
+        copilot_byok::remove_custom_target(state.db.as_ref(), &target_id).map_err(String::from)?;
     reproject_shared_resources(state.inner())?;
     Ok(updated)
 }
