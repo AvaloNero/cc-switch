@@ -42,6 +42,8 @@
     "deleting": "删除中...",
     "auto": "自动",
     "enabled": "已开启",
+    "disabled": "已停用",
+    "restore": "恢复",
     "notSet": "未设置"
   },
   "firstRunNotice": {
@@ -910,7 +912,9 @@
     "opencode": "OpenCode",
     "openclaw": "OpenClaw",
     "hermes": "Hermes",
-    "pi": "Pi"
+    "pi": "Pi",
+    "copilotByok": "VS Code Copilot",
+    "copilot-byok": "VS Code Copilot"
   },
   "pi": {
     "empty": {
@@ -1648,6 +1652,67 @@
     "modelOptionKeyPlaceholder": "provider",
     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
   },
+  "copilotByok": {
+    "description": "管理 VS Code Copilot 模型选择器中的自定义端点供应商。",
+    "loading": "正在读取 VS Code 配置…",
+    "targets": "同步目标",
+    "targetsDescription": "选择由 CC Switch 管理 chatLanguageModels.json 的 VS Code Profile；配置变化会自动同步。",
+    "optInTitle": "当前未管理任何 Profile",
+    "optInDescription": "选择同步目标后，CC Switch 才会向 VS Code 写入供应商配置。",
+    "noTargets": "未检测到 VS Code Stable 或 Insiders Profile；可在下方添加 chatLanguageModels.json 的绝对路径。",
+    "defaultProfile": "默认 Profile",
+    "configExists": "已有配置",
+    "backupExists": "可用备份",
+    "managedGroups": "已管理供应商",
+    "importWarnings": "部分配置未能导入",
+    "removeCustom": "移除目标",
+    "customTarget": "自定义目标",
+    "customName": "目标名称（可选）",
+    "customPath": "chatLanguageModels.json 绝对路径",
+    "addTarget": "添加并选中",
+    "modelsDescription": "每个供应商中的多个模型共享同一种接口格式、端点和凭据。",
+    "modelCount": "个模型",
+    "repairSync": "重新同步",
+    "stopManaging": "停止管理所选 Profile",
+    "selectedProfiles": "已选 Profile",
+    "enabledModels": "启用模型",
+    "changedFiles": "已更新文件",
+    "securityTitle": "API Key 存储",
+    "security": "在 CC Switch 中填写的 API Key 会写入 chatLanguageModels.json 的模型请求头；从 VS Code 导入的 SecretStorage 引用仍保持为引用。请妥善保护这两处配置文件。",
+    "readError": "配置读取失败",
+    "saveModelSuccess": "供应商已保存并同步",
+    "saveModelLocalSuccess": "供应商已保存到本地；当前未选择同步目标",
+    "deleteModelSuccess": "供应商已删除并同步",
+    "deleteModelLocalSuccess": "供应商已从本地删除；当前未选择同步目标",
+    "targetUpdateSuccess": "同步目标已更新",
+    "syncSuccess": "VS Code Copilot 配置已同步",
+    "stopSuccess": "已移除受管供应商并取消选择对应 Profile",
+    "restoreSuccess": "配置已恢复，并已停止管理该目标",
+    "restoreNoop": "已停止管理该目标；没有可恢复的备份或受管供应商",
+    "customAdded": "已添加自定义目标",
+    "customRemoved": "已移除自定义目标",
+    "confirmDelete": "确定删除这个供应商吗？其中的模型会从所有已选 VS Code Profile 中移除。",
+    "confirmStop": "确定停止管理所选 Profile 吗？受管供应商会被移除，其他 VS Code 配置会保留。",
+    "form": {
+      "apiKey": "API Key",
+      "apiType": "接口格式",
+      "maxInput": "最大输入 Token",
+      "toolCalling": "工具调用",
+      "vision": "视觉",
+      "thinking": "思考",
+      "streaming": "流式输出",
+      "zeroDataRetention": "零数据保留",
+      "editTools": "编辑工具",
+      "reasoningEfforts": "推理强度",
+      "reasoningEffortsPlaceholder": "low, medium, high",
+      "urlPlaceholder": "https://api.example.com/v1",
+      "modelIdPlaceholder": "模型 ID",
+      "modelNamePlaceholder": "显示名称",
+      "chatCompletions": "OpenAI Chat Completions",
+      "responses": "OpenAI Responses",
+      "messages": "Anthropic Messages"
+    }
+  },
   "providerPreset": {
     "label": "预设供应商",
     "custom": "自定义配置",
@@ -1716,7 +1781,8 @@
       "gemini": "Gemini",
       "opencode": "OpenCode",
       "grokbuild": "Grok Build",
-      "pi": "Pi"
+      "pi": "Pi",
+      "copilot-byok": "VS Code Copilot"
     },
     "rawInputLabel": "原始",
     "rebuildCodex": {

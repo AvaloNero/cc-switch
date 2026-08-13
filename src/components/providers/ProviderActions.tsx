@@ -32,7 +32,7 @@ interface OpenClawDefaultModelOption {
 }
 
 interface ProviderActionsProps {
-  appId?: AppId;
+  appId?: AppId | "copilot-byok";
   isCurrent: boolean;
   isInConfig?: boolean;
   isTesting?: boolean;
@@ -43,6 +43,7 @@ interface ProviderActionsProps {
   onDuplicate?: () => void;
   onTest?: () => void;
   onConfigureUsage?: () => void;
+  configureUsageTitle?: string;
   onDelete: () => void;
   onRemoveFromConfig?: () => void;
   onDisableOmo?: () => void;
@@ -85,6 +86,7 @@ export function ProviderActions({
   onDuplicate,
   onTest,
   onConfigureUsage,
+  configureUsageTitle,
   onDelete,
   onRemoveFromConfig,
   onDisableOmo,
@@ -107,7 +109,8 @@ export function ProviderActions({
   // Additive provider membership: providers can coexist in the native config.
   const isAdditiveMode =
     Boolean(appId && isAdditiveAppId(appId)) &&
-    !(appId === "opencode" && isOmo);
+    !(appId === "opencode" && isOmo) ||
+    appId === "copilot-byok";
 
   // 故障转移模式下的按钮逻辑（累加模式和 OMO 应用不支持故障转移）
   const isFailoverMode =
@@ -433,8 +436,8 @@ export function ProviderActions({
         <Button
           size="icon"
           variant="ghost"
-          onClick={onConfigureUsage || undefined}
-          title={t("provider.configureUsage")}
+          onClick={onConfigureUsage ? () => onConfigureUsage() : undefined}
+          title={configureUsageTitle ?? t("provider.configureUsage")}
           className={cn(
             iconButtonClass,
             !onConfigureUsage &&

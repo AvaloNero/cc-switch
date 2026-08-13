@@ -32,6 +32,7 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
     gemini: "GEMINI.md",
     grokbuild: "AGENTS.md",
     opencode: "AGENTS.md",
+    "copilot-byok": "cc-switch.prompt.md",
     openclaw: "AGENTS.md",
     hermes: "SOUL.md",
     pi: "AGENTS.md",

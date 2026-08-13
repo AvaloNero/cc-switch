@@ -21,6 +21,7 @@ export interface SkillApps {
   gemini: boolean;
   grokbuild?: boolean;
   opencode: boolean;
+  "copilot-byok"?: boolean;
   openclaw: boolean;
   hermes: boolean;
   pi: boolean;

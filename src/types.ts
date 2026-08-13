@@ -298,6 +298,7 @@ export interface VisibleApps {
   openclaw: boolean;
   hermes: boolean;
   pi: boolean;
+  copilotByok: boolean;
 }
 
 // WebDAV 同步状态
@@ -509,6 +510,7 @@ export interface McpApps {
   gemini: boolean;
   grokbuild?: boolean;
   opencode: boolean;
+  "copilot-byok"?: boolean;
   openclaw: boolean;
   hermes: boolean;
 }
