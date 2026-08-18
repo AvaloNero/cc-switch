@@ -1653,7 +1653,24 @@
     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
   },
   "copilotByok": {
-    "description": "Manage custom endpoint providers for the VS Code Copilot model picker.",
+    "description": "Manage a shared custom-provider catalog for VS Code Copilot and Copilot CLI.",
+    "cli": {
+      "title": "Copilot CLI",
+      "description": "Choose one provider and model to expose through the Windows user environment.",
+      "provider": "Provider",
+      "model": "Model",
+      "apply": "Apply to Copilot CLI",
+      "disable": "Restore Original Environment",
+      "active": "Active",
+      "inactive": "Not Configured",
+      "needsApply": "Needs Apply",
+      "unsupported": "Windows Only",
+      "restart": "The change applies to newly opened CMD or PowerShell sessions. Fully restart Windows Terminal if necessary.",
+      "security": "The API key and saved original values are stored as plaintext in the Windows user environment and device-local state. Newly started processes inherit the active values.",
+      "conflict": "Managed environment variables were changed outside CC Switch. They will not be overwritten automatically.",
+      "applySuccess": "Copilot CLI environment updated. Open a new terminal to use it.",
+      "disableSuccess": "The original Copilot CLI environment was restored."
+    },
     "loading": "Reading VS Code configuration…",
     "targets": "Sync Targets",
     "targetsDescription": "Choose the VS Code profiles whose chatLanguageModels.json files are managed by CC Switch. Changes are synchronized automatically.",

@@ -65,11 +65,23 @@ export interface CopilotByokTargetState {
   readError: string | null;
 }
 
+export interface CopilotCliState {
+  supported: boolean;
+  enabled: boolean;
+  selectedGroupId: string | null;
+  selectedModelId: string | null;
+  selectedProviderName: string | null;
+  selectedModelName: string | null;
+  environmentMatches: boolean;
+  environmentConflicts: string[];
+}
+
 export interface CopilotByokState {
   groups: CopilotByokGroup[];
   targets: CopilotByokTargetState[];
   selectedTargetIds: string[];
   managedModelCount: number;
+  cli: CopilotCliState;
 }
 
 export interface CopilotByokSyncResult {
@@ -91,6 +103,17 @@ export interface CopilotByokImportResult {
 export const copilotByokApi = {
   getState(): Promise<CopilotByokState> {
     return invoke<CopilotByokState>("copilot_byok_get_state");
+  },
+
+  setCliSelection(groupId: string, modelId: string): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_byok_set_cli_selection", {
+      groupId,
+      modelId,
+    });
+  },
+
+  disableCli(): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_byok_disable_cli");
   },
 
   setTargets(targetIds: string[]): Promise<CopilotByokState> {

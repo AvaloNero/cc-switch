@@ -1697,6 +1697,8 @@ pub fn run() {
             commands::copilot_get_usage_for_account,
             // VS Code Copilot BYOK model catalog
             commands::copilot_byok_get_state,
+            commands::copilot_byok_set_cli_selection,
+            commands::copilot_byok_disable_cli,
             commands::copilot_byok_set_targets,
             commands::copilot_byok_add_custom_target,
             commands::copilot_byok_remove_custom_target,

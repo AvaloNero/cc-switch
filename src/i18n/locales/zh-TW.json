@@ -1654,7 +1654,24 @@
     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
   },
   "copilotByok": {
-    "description": "管理 VS Code Copilot 模型選擇器中的自訂端點供應商。",
+    "description": "管理供 VS Code Copilot 與 Copilot CLI 共用的自訂供應商目錄。",
+    "cli": {
+      "title": "Copilot CLI",
+      "description": "選擇一個供應商與模型，並寫入 Windows 目前使用者環境變數。",
+      "provider": "供應商",
+      "model": "模型",
+      "apply": "套用至 Copilot CLI",
+      "disable": "還原原始環境",
+      "active": "已生效",
+      "inactive": "未設定",
+      "needsApply": "需要重新套用",
+      "unsupported": "僅支援 Windows",
+      "restart": "變更會在新開啟的 CMD 或 PowerShell 生效；必要時請完整重新啟動 Windows Terminal。",
+      "security": "API Key 與儲存的原始值會以明文存放在 Windows 使用者環境及本機狀態檔中；新啟動的程序會繼承目前值。",
+      "conflict": "受管理的環境變數已由 CC Switch 以外的程式修改，因此不會自動覆寫。",
+      "applySuccess": "Copilot CLI 環境已更新，請開啟新終端機使用。",
+      "disableSuccess": "已還原 Copilot CLI 原始環境。"
+    },
     "loading": "正在讀取 VS Code 設定…",
     "targets": "同步目標",
     "targetsDescription": "選擇由 CC Switch 管理 chatLanguageModels.json 的 VS Code Profile；設定變更會自動同步。",

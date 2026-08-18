@@ -34,6 +34,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  SquareTerminal,
   Trash2,
   Unplug,
   X,
@@ -46,6 +47,13 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
 import { ProviderActions } from "@/components/providers/ProviderActions";
 import { ProviderIcon } from "@/components/ProviderIcon";
@@ -68,6 +76,8 @@ type BusyAction =
   | "sync"
   | "remove"
   | "reorder"
+  | "cli"
+  | "cli-disable"
   | `import:${string}`
   | `restore:${string}`
   | `custom-remove:${string}`
@@ -279,6 +289,21 @@ export const CopilotByokSettings = forwardRef<
     customRemoved: t("copilotByok.customRemoved"),
     confirmDelete: t("copilotByok.confirmDelete"),
     confirmStop: t("copilotByok.confirmStop"),
+    cliTitle: t("copilotByok.cli.title"),
+    cliDescription: t("copilotByok.cli.description"),
+    cliProvider: t("copilotByok.cli.provider"),
+    cliModel: t("copilotByok.cli.model"),
+    cliApply: t("copilotByok.cli.apply"),
+    cliDisable: t("copilotByok.cli.disable"),
+    cliActive: t("copilotByok.cli.active"),
+    cliInactive: t("copilotByok.cli.inactive"),
+    cliNeedsApply: t("copilotByok.cli.needsApply"),
+    cliUnsupported: t("copilotByok.cli.unsupported"),
+    cliRestart: t("copilotByok.cli.restart"),
+    cliSecurity: t("copilotByok.cli.security"),
+    cliConflict: t("copilotByok.cli.conflict"),
+    cliApplySuccess: t("copilotByok.cli.applySuccess"),
+    cliDisableSuccess: t("copilotByok.cli.disableSuccess"),
   };
   const [state, setState] = useState<CopilotByokState | null>(null);
   const [busy, setBusy] = useState<BusyAction>("load");
@@ -288,6 +313,8 @@ export const CopilotByokSettings = forwardRef<
   );
   const [customName, setCustomName] = useState("");
   const [customPath, setCustomPath] = useState("");
+  const [cliGroupId, setCliGroupId] = useState("");
+  const [cliModelId, setCliModelId] = useState("");
   const [testingGroupId, setTestingGroupId] = useState<string | null>(null);
   const [pendingDeleteGroup, setPendingDeleteGroup] =
     useState<CopilotByokGroup | null>(null);
@@ -324,6 +351,21 @@ export const CopilotByokSettings = forwardRef<
   }, [load]);
 
   useEffect(() => {
+    if (!state) return;
+    const groupId =
+      state.cli.selectedGroupId ??
+      state.groups.find((group) => group.models.length > 0)?.id ??
+      "";
+    const group = state.groups.find((item) => item.id === groupId);
+    const modelId =
+      state.cli.selectedGroupId === groupId
+        ? (state.cli.selectedModelId ?? group?.models[0]?.id ?? "")
+        : (group?.models[0]?.id ?? "");
+    setCliGroupId(groupId);
+    setCliModelId(modelId);
+  }, [state]);
+
+  useEffect(() => {
     if (!catalogOnly) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -352,6 +394,11 @@ export const CopilotByokSettings = forwardRef<
   const selectedTargets = useMemo(
     () => state?.targets.filter((target) => target.selected) ?? [],
     [state],
+  );
+
+  const selectedCliGroup = useMemo(
+    () => state?.groups.find((group) => group.id === cliGroupId) ?? null,
+    [cliGroupId, state?.groups],
   );
 
   const filteredGroups = useMemo(() => {
@@ -670,6 +717,34 @@ export const CopilotByokSettings = forwardRef<
     }
   };
 
+  const applyCliSelection = async () => {
+    if (!state?.cli.supported || !cliGroupId || !cliModelId || busy) return;
+    setBusy("cli");
+    try {
+      const next = await copilotByokApi.setCliSelection(cliGroupId, cliModelId);
+      setState(next);
+      toast.success(copy.cliApplySuccess);
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const disableCli = async () => {
+    if (!state?.cli.supported || !state.cli.enabled || busy) return;
+    setBusy("cli-disable");
+    try {
+      const next = await copilotByokApi.disableCli();
+      setState(next);
+      toast.success(copy.cliDisableSuccess);
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (!state && busy === "load") {
     return (
       <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
@@ -836,6 +911,12 @@ export const CopilotByokSettings = forwardRef<
     );
   }
 
+  const cliDraftMatches =
+    state.cli.enabled &&
+    state.cli.selectedGroupId === cliGroupId &&
+    state.cli.selectedModelId === cliModelId &&
+    state.cli.environmentMatches;
+
   return (
     <div className="space-y-3">
       {selectedTargets.length === 0 ? (
@@ -851,6 +932,151 @@ export const CopilotByokSettings = forwardRef<
           </div>
         </div>
       ) : null}
+
+      <section
+        aria-labelledby="copilot-byok-cli"
+        className="overflow-hidden rounded-xl border border-border bg-card"
+      >
+        <div className="flex flex-col gap-3 border-b border-border/60 px-4 py-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <SquareTerminal className="h-4 w-4 text-muted-foreground" />
+              <h3
+                id="copilot-byok-cli"
+                className="text-base font-semibold leading-none"
+              >
+                {copy.cliTitle}
+              </h3>
+              <Badge
+                variant={cliDraftMatches ? "secondary" : "outline"}
+                className="h-5 px-1.5 text-[10px] font-medium"
+              >
+                {!state.cli.supported
+                  ? copy.cliUnsupported
+                  : cliDraftMatches
+                    ? copy.cliActive
+                    : state.cli.enabled
+                      ? copy.cliNeedsApply
+                      : copy.cliInactive}
+              </Badge>
+            </div>
+            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+              {copy.cliDescription}
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-4 px-5 py-5">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label className="text-xs font-medium text-muted-foreground">
+                {copy.cliProvider}
+              </Label>
+              <Select
+                value={cliGroupId}
+                disabled={Boolean(busy) || !state.cli.supported}
+                onValueChange={(value) => {
+                  const group = state.groups.find((item) => item.id === value);
+                  setCliGroupId(value);
+                  setCliModelId(group?.models[0]?.id ?? "");
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={copy.cliProvider} />
+                </SelectTrigger>
+                <SelectContent>
+                  {state.groups.map((group) => (
+                    <SelectItem
+                      key={group.id}
+                      value={group.id}
+                      disabled={group.models.length === 0}
+                    >
+                      {group.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs font-medium text-muted-foreground">
+                {copy.cliModel}
+              </Label>
+              <Select
+                value={cliModelId}
+                disabled={
+                  Boolean(busy) || !state.cli.supported || !selectedCliGroup
+                }
+                onValueChange={setCliModelId}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={copy.cliModel} />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedCliGroup?.models.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.name} · {model.modelId}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {state.cli.environmentConflicts.length > 0 ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>{copy.cliConflict}</AlertTitle>
+              <AlertDescription className="break-all font-mono text-xs">
+                {state.cli.environmentConflicts.join(", ")}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          <div className="space-y-1 text-[11px] leading-4 text-muted-foreground">
+            <p>{copy.cliRestart}</p>
+            <p>{copy.cliSecurity}</p>
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2">
+            {state.cli.enabled ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                disabled={Boolean(busy) || !state.cli.supported}
+                onClick={() => void disableCli()}
+              >
+                {busy === "cli-disable" ? (
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                )}
+                {copy.cliDisable}
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              className="h-8 text-xs"
+              disabled={
+                Boolean(busy) ||
+                !state.cli.supported ||
+                !cliGroupId ||
+                !cliModelId ||
+                cliDraftMatches
+              }
+              onClick={() => void applyCliSelection()}
+            >
+              {busy === "cli" ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <SquareTerminal className="mr-2 h-3.5 w-3.5" />
+              )}
+              {copy.cliApply}
+            </Button>
+          </div>
+        </div>
+      </section>
 
       <section
         aria-labelledby="copilot-byok-targets"

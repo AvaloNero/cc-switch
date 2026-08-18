@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const STORE_FILE: &str = "copilot-byok.json";
-const STORE_VERSION: u32 = 6;
+const STORE_VERSION: u32 = 7;
 const MAX_TARGETS: usize = 64;
 const MAX_GROUPS: usize = 256;
 const MAX_MODELS: usize = 256;
@@ -42,6 +42,32 @@ pub struct CopilotByokCustomTarget {
     pub language_models_path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotCliManagedEnvironment {
+    /// Values that existed before CC Switch first enabled CLI management.
+    /// `None` means the variable was absent and must be removed on restore.
+    #[serde(default)]
+    pub original: BTreeMap<String, Option<String>>,
+    /// Last values written by CC Switch. These are compared before a switch or
+    /// restore so an external edit is never overwritten silently.
+    #[serde(default)]
+    pub last_written: BTreeMap<String, Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotCliConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_model_id: Option<String>,
+    #[serde(default)]
+    pub managed_environment: CopilotCliManagedEnvironment,
+}
+
 impl CopilotByokCustomTarget {
     pub fn from_path(path: impl AsRef<Path>, name: Option<String>) -> Result<Self, AppError> {
         let normalized_path = normalize_language_models_path(path.as_ref())?;
@@ -70,6 +96,8 @@ pub struct CopilotByokStore {
     pub custom_targets: Vec<CopilotByokCustomTarget>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<CopilotByokGroup>,
+    #[serde(default)]
+    pub cli: CopilotCliConfig,
 }
 
 impl Default for CopilotByokStore {
@@ -80,6 +108,7 @@ impl Default for CopilotByokStore {
             selected_target_ids: Vec::new(),
             custom_targets: Vec::new(),
             groups: Vec::new(),
+            cli: CopilotCliConfig::default(),
         }
     }
 }
@@ -296,6 +325,24 @@ pub(crate) fn normalize_store(store: &mut CopilotByokStore) -> Result<(), AppErr
         store.targets_initialized = true;
     }
     store.version = STORE_VERSION;
+
+    store.cli.selected_group_id = store
+        .cli
+        .selected_group_id
+        .take()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    store.cli.selected_model_id = store
+        .cli
+        .selected_model_id
+        .take()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if !store.cli.enabled {
+        store.cli.selected_group_id = None;
+        store.cli.selected_model_id = None;
+        store.cli.managed_environment = CopilotCliManagedEnvironment::default();
+    }
 
     let mut selected = HashSet::new();
     store.selected_target_ids.retain(|id| {

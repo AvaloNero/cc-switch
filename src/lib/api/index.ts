@@ -31,6 +31,7 @@ export type {
   CopilotByokEditTool,
   CopilotByokGroup,
   CopilotByokImportResult,
+  CopilotCliState,
   CopilotByokModel,
   CopilotByokReasoningEffortFormat,
   CopilotByokState,

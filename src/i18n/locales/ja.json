@@ -1653,7 +1653,24 @@
     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
   },
   "copilotByok": {
-    "description": "VS Code Copilot のモデル選択に表示するカスタムエンドポイントプロバイダーを管理します。",
+    "description": "VS Code Copilot と Copilot CLI で共有するカスタムプロバイダーカタログを管理します。",
+    "cli": {
+      "title": "Copilot CLI",
+      "description": "プロバイダーとモデルを 1 つ選び、Windows のユーザー環境変数に設定します。",
+      "provider": "プロバイダー",
+      "model": "モデル",
+      "apply": "Copilot CLI に適用",
+      "disable": "元の環境を復元",
+      "active": "有効",
+      "inactive": "未設定",
+      "needsApply": "再適用が必要",
+      "unsupported": "Windows のみ",
+      "restart": "新しく開いた CMD または PowerShell で有効になります。必要に応じて Windows Terminal を完全に再起動してください。",
+      "security": "API キーと保存した元の値は、Windows のユーザー環境および端末ローカルの状態ファイルに平文で保存されます。新しく起動したプロセスは現在の値を継承します。",
+      "conflict": "管理対象の環境変数が CC Switch 以外で変更されたため、自動的には上書きしません。",
+      "applySuccess": "Copilot CLI の環境を更新しました。新しいターミナルを開いてください。",
+      "disableSuccess": "Copilot CLI の元の環境を復元しました。"
+    },
     "loading": "VS Code の設定を読み込んでいます…",
     "targets": "同期先",
     "targetsDescription": "CC Switch が chatLanguageModels.json を管理する VS Code プロファイルを選択します。変更は自動的に同期されます。",

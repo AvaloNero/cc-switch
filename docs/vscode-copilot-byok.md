@@ -18,6 +18,16 @@ The app switcher opens a provider-only catalog as a primary page, matching the o
 
 The Sync Targets toolbar action opens VS Code profile selection together with import, restore, resync, and stop-management actions. Advanced Settings > Configuration Directories remains limited to application directory overrides. Provider cards and provider editing remain on the first-level application page.
 
+## Copilot CLI
+
+On Windows, the same provider catalog can also select one provider and one model for GitHub Copilot CLI. CC Switch writes the provider contract to the current user's environment, so typing `copilot` in a newly opened CMD or PowerShell session uses that custom model without a wrapper executable. Existing terminals keep their inherited environment; after applying or restoring a selection, open a new terminal and fully restart Windows Terminal if it still reuses an old environment.
+
+CC Switch manages the complete `COPILOT_PROVIDER_*` / `COPILOT_MODEL` set used by Copilot CLI, including provider type, base URL, API key, wire API, headers, model ID, and token limits. Responses and Chat Completions providers map to Copilot CLI's OpenAI provider type; Messages providers map to its Anthropic provider type. A terminal endpoint suffix such as `/responses`, `/chat/completions`, or `/v1/messages` is removed before writing `COPILOT_PROVIDER_BASE_URL`.
+
+The first apply operation snapshots every managed user environment variable in device-local `copilot-byok.json`. Switching providers retains that original snapshot; **Restore original environment** puts those values back and stops CLI management. Before switching or restoring, CC Switch compares the live environment against its last write and refuses to overwrite variables changed by another tool or by the user. Registry writes are rollback-protected, and CC Switch broadcasts the Windows environment-change notification after a successful update.
+
+Copilot CLI cannot resolve VS Code SecretStorage `${input:...}` references, so such a provider must be given a literal key before it can be selected for the CLI. Literal API keys and any pre-existing values captured for restoration are stored in the Windows user environment and the device-local state file as plaintext; they are inherited by newly started processes. CLI environment management is therefore intentionally Windows-only in this implementation.
+
 ## Managed files
 
 Detected targets include VS Code Stable and Insiders default profiles and named profiles declared in VS Code's profile metadata. Language models, prompts, and MCP are resolved independently according to the corresponding VS Code Profile inheritance flags, and each resource is deduplicated by physical path before synchronization. A custom absolute path to `chatLanguageModels.json` can also be added. Canonical path identity prevents the same physical file from being managed twice through aliases such as `..`, symlinks, or Windows case differences.
@@ -67,6 +77,7 @@ Statistics are reconstructed from VS Code Copilot's local conversation history a
 - `src-tauri/src/copilot_byok.rs`
 - `src-tauri/src/copilot_byok/model.rs`
 - `src-tauri/src/copilot_byok/store.rs`
+- `src-tauri/src/copilot_byok/cli.rs`
 - `src-tauri/src/copilot_byok/sync.rs`
 - `src-tauri/src/copilot_byok/import.rs`
 - `src-tauri/src/copilot_byok/vscode.rs`

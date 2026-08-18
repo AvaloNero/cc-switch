@@ -25,6 +25,20 @@ pub fn copilot_byok_get_state(state: State<'_, AppState>) -> Result<CopilotByokS
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn copilot_byok_set_cli_selection(
+    state: State<'_, AppState>,
+    group_id: String,
+    model_id: String,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::set_cli_selection(state.db.as_ref(), &group_id, &model_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn copilot_byok_disable_cli(state: State<'_, AppState>) -> Result<CopilotByokState, String> {
+    copilot_byok::disable_cli(state.db.as_ref()).map_err(Into::into)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn copilot_byok_set_targets(
     state: State<'_, AppState>,
     target_ids: Vec<String>,

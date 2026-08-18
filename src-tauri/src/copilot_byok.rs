@@ -1,9 +1,11 @@
+mod cli;
 mod import;
 mod model;
 mod store;
 mod sync;
 mod vscode;
 
+pub use cli::CopilotCliState;
 pub use import::CopilotByokImportResult;
 pub use model::CopilotByokGroup;
 pub use sync::CopilotByokSyncResult;
@@ -145,6 +147,7 @@ pub struct CopilotByokState {
     pub targets: Vec<CopilotByokTargetState>,
     pub selected_target_ids: Vec<String>,
     pub managed_model_count: usize,
+    pub cli: CopilotCliState,
 }
 
 fn operation_guard() -> Result<MutexGuard<'static, ()>, AppError> {
@@ -281,6 +284,7 @@ fn canonicalize_detected_target_ids(
 }
 
 fn build_state(store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
+    let cli = cli::get_state(&store, &store.groups)?;
     let detected = vscode::discover_vscode_targets()?;
     let aliases = detected_target_aliases(&detected);
     let available_ids: HashSet<String> = detected
@@ -322,6 +326,7 @@ fn build_state(store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
         groups: store.groups,
         targets,
         selected_target_ids,
+        cli,
     })
 }
 
@@ -360,6 +365,26 @@ fn commit_and_build(
 pub fn get_state(db: &Database) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
     build_state(load_runtime_store(db)?)
+}
+
+pub fn set_cli_selection(
+    db: &Database,
+    group_id: &str,
+    model_id: &str,
+) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    let mut store = load_runtime_store(db)?;
+    let groups = store.groups.clone();
+    cli::apply(&mut store, &groups, group_id, model_id)?;
+    build_state(store)
+}
+
+pub fn disable_cli(db: &Database) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    let mut store = load_runtime_store(db)?;
+    let groups = store.groups.clone();
+    cli::disable(&mut store, &groups)?;
+    build_state(store)
 }
 
 pub fn sync_selected_on_startup(db: &Database) -> Result<(), AppError> {
@@ -486,6 +511,7 @@ pub fn upsert_group(
     } else {
         updated.groups.push(group);
     }
+    cli::validate_selection(&updated)?;
     persist_catalog(db, &updated.groups)?;
     match commit_and_build(
         db,
@@ -511,6 +537,7 @@ pub fn delete_group(db: &Database, group_id: &str) -> Result<CopilotByokState, A
     let previous_groups = current.groups.clone();
     let mut updated = current.clone();
     updated.groups.retain(|group| group.id != group_id);
+    cli::validate_selection(&updated)?;
     persist_catalog(db, &updated.groups)?;
     match commit_and_build(
         db,
