@@ -117,8 +117,10 @@ describe("CopilotByokGroupPanel", () => {
         false,
         undefined,
         undefined,
-        "chat-completions",
-        {},
+        {
+          apiFormat: "chat-completions",
+          requestHeaders: {},
+        },
       ),
     );
 

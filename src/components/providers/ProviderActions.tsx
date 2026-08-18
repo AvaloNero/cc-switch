@@ -108,8 +108,8 @@ export function ProviderActions({
 
   // Additive provider membership: providers can coexist in the native config.
   const isAdditiveMode =
-    Boolean(appId && isAdditiveAppId(appId)) &&
-    !(appId === "opencode" && isOmo) ||
+    (Boolean(appId && isAdditiveAppId(appId)) &&
+      !(appId === "opencode" && isOmo)) ||
     appId === "copilot-byok";
 
   // 故障转移模式下的按钮逻辑（累加模式和 OMO 应用不支持故障转移）

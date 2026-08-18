@@ -4015,7 +4015,7 @@ mod tests {
             .await
             .expect_err("Copilot takeover must be rejected");
 
-        assert!(error.contains("不支持本地代理接管"));
+        assert!(error.contains("不支持本地路由"));
         assert!(!service.is_running().await);
     }
 

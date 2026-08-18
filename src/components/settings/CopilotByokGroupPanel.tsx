@@ -335,17 +335,10 @@ export function CopilotByokGroupPanel({
       ),
     );
     Promise.all([
-      fetchModelsForConfig(
-        baseUrl,
-        apiKey,
-        false,
-        undefined,
-        undefined,
-        {
-          apiFormat: draft.apiType,
-          requestHeaders,
-        },
-      ),
+      fetchModelsForConfig(baseUrl, apiKey, false, undefined, undefined, {
+        apiFormat: draft.apiType,
+        requestHeaders,
+      }),
       // models.dev is the same capability catalog used by OpenCode. Failure to
       // load it must not hide the provider's own /models result; documented
       // provider-contract fallbacks still apply offline.

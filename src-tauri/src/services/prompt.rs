@@ -579,6 +579,7 @@ mod tests {
 #[cfg(test)]
 mod pi_prompt_tests {
     use super::*;
+    use crate::config::write_text_file;
     use crate::database::Database;
     use crate::pi_config::test_support::TestAgentDir;
     use serial_test::serial;
