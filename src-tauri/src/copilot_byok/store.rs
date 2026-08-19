@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const STORE_FILE: &str = "copilot-byok.json";
-const STORE_VERSION: u32 = 7;
+const STORE_VERSION: u32 = 8;
 const MAX_TARGETS: usize = 64;
 const MAX_GROUPS: usize = 256;
 const MAX_MODELS: usize = 256;
@@ -98,6 +98,14 @@ pub struct CopilotByokStore {
     pub groups: Vec<CopilotByokGroup>,
     #[serde(default)]
     pub cli: CopilotCliConfig,
+    /// One-time migration marker for splitting the historical shared provider
+    /// catalog into independent VS Code Copilot and Copilot CLI catalogs.
+    #[serde(default)]
+    pub cli_catalog_initialized: bool,
+    /// One-time migration marker for collapsing the historical VS Code-style
+    /// multi-model CLI catalog to one default model per provider.
+    #[serde(default)]
+    pub cli_single_model_catalog_initialized: bool,
 }
 
 impl Default for CopilotByokStore {
@@ -109,6 +117,8 @@ impl Default for CopilotByokStore {
             custom_targets: Vec::new(),
             groups: Vec::new(),
             cli: CopilotCliConfig::default(),
+            cli_catalog_initialized: false,
+            cli_single_model_catalog_initialized: false,
         }
     }
 }
@@ -384,18 +394,17 @@ pub(crate) fn normalize_store(store: &mut CopilotByokStore) -> Result<(), AppErr
             "Copilot BYOK supports at most {MAX_TARGETS} selected or custom targets"
         )));
     }
-    if store.groups.len() > MAX_GROUPS {
+    normalize_groups(&mut store.groups)?;
+    Ok(())
+}
+
+pub(crate) fn normalize_groups(groups: &mut Vec<CopilotByokGroup>) -> Result<(), AppError> {
+    if groups.len() > MAX_GROUPS {
         return Err(AppError::InvalidInput(format!(
             "Copilot BYOK supports at most {MAX_GROUPS} provider groups"
         )));
     }
-    if store
-        .groups
-        .iter()
-        .map(|group| group.models.len())
-        .sum::<usize>()
-        > MAX_MODELS
-    {
+    if groups.iter().map(|group| group.models.len()).sum::<usize>() > MAX_MODELS {
         return Err(AppError::InvalidInput(format!(
             "Copilot BYOK supports at most {MAX_MODELS} models"
         )));
@@ -403,7 +412,7 @@ pub(crate) fn normalize_store(store: &mut CopilotByokStore) -> Result<(), AppErr
 
     let mut group_ids = HashSet::new();
     let mut group_names = HashSet::new();
-    for group in &mut store.groups {
+    for group in groups {
         group.normalize();
         group.validate()?;
         if !group_ids.insert(group.id.clone()) {

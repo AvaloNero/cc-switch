@@ -33,6 +33,7 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
     grokbuild: "AGENTS.md",
     opencode: "AGENTS.md",
     "copilot-byok": "cc-switch.prompt.md",
+    "copilot-cli": "copilot-instructions.md",
     openclaw: "AGENTS.md",
     hermes: "SOUL.md",
     pi: "AGENTS.md",

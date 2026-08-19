@@ -210,7 +210,7 @@ impl ProviderType {
             AppType::OpenCode | AppType::CopilotByok | AppType::OpenClaw | AppType::Hermes => {
                 ProviderType::Codex
             }
-            AppType::Pi => return None,
+            AppType::CopilotCli | AppType::Pi => return None,
         };
         Some(provider_type)
     }
@@ -268,7 +268,7 @@ pub fn get_adapter(app_type: &AppType) -> Option<Box<dyn ProviderAdapter>> {
         AppType::OpenCode | AppType::CopilotByok | AppType::OpenClaw | AppType::Hermes => {
             Box::new(CodexAdapter::new())
         }
-        AppType::Pi => return None,
+        AppType::CopilotCli | AppType::Pi => return None,
     })
 }
 

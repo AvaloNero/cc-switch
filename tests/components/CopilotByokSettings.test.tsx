@@ -15,8 +15,6 @@ const mocks = vi.hoisted(() => ({
   deleteGroup: vi.fn(),
   reorderGroups: vi.fn(),
   checkConnection: vi.fn(),
-  setCliSelection: vi.fn(),
-  disableCli: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -28,9 +26,8 @@ vi.mock("@/lib/api", () => ({
     deleteGroup: mocks.deleteGroup,
     reorderGroups: mocks.reorderGroups,
     checkConnection: mocks.checkConnection,
-    setCliSelection: mocks.setCliSelection,
-    disableCli: mocks.disableCli,
   },
+  copilotCliApi: {},
 }));
 
 vi.mock("sonner", () => ({
@@ -70,8 +67,6 @@ vi.mock("react-i18next", () => ({
         "copilotByok.stopManaging": "停止管理所选 Profile",
         "copilotByok.securityTitle": "API Key 存储提示",
         "copilotByok.repairSync": "重新同步",
-        "copilotByok.cli.title": "Copilot CLI",
-        "copilotByok.cli.apply": "应用到 Copilot CLI",
         "common.edit": "编辑",
         "common.delete": "删除",
       })[key] ?? key,
@@ -166,8 +161,6 @@ describe("CopilotByokSettings", () => {
     mocks.upsertGroup.mockResolvedValue(state(true));
     mocks.deleteGroup.mockResolvedValue(state(true));
     mocks.reorderGroups.mockResolvedValue(state(true));
-    mocks.setCliSelection.mockResolvedValue(state(true));
-    mocks.disableCli.mockResolvedValue(state(true));
   });
 
   it("loads with the VS Code default profile selected", async () => {
@@ -221,29 +214,15 @@ describe("CopilotByokSettings", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows sync targets and CLI selection without provider catalog actions", async () => {
+  it("shows sync targets without provider catalog actions", async () => {
     mocks.getState.mockResolvedValue({ ...state(true), groups: [group] });
     render(<CopilotByokSettings mode="targets" />);
 
     expect(await screen.findByText("同步目标")).toBeInTheDocument();
-    expect(screen.getByText("Copilot CLI")).toBeInTheDocument();
     expect(screen.queryByText("API Key 存储提示")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "添加供应商" }),
     ).not.toBeInTheDocument();
-  });
-
-  it("applies the selected provider and model to Copilot CLI", async () => {
-    mocks.getState.mockResolvedValue({ ...state(true), groups: [group] });
-    render(<CopilotByokSettings mode="targets" />);
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "应用到 Copilot CLI" }),
-    );
-
-    await waitFor(() =>
-      expect(mocks.setCliSelection).toHaveBeenCalledWith("moonshot", "kimi-k3"),
-    );
   });
 
   it("reuses the standard empty state and imports the selected VS Code config", async () => {

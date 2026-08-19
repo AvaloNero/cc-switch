@@ -176,3 +176,38 @@ export const copilotByokApi = {
     });
   },
 };
+
+/** Independent first-class GitHub Copilot CLI provider catalog and switcher. */
+export const copilotCliApi = {
+  getState(): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_cli_get_state");
+  },
+
+  setSelection(groupId: string): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_cli_set_selection", {
+      groupId,
+    });
+  },
+
+  disable(): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_cli_disable");
+  },
+
+  upsertGroup(group: CopilotByokGroup): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_cli_upsert_group", { group });
+  },
+
+  deleteGroup(groupId: string): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_cli_delete_group", { groupId });
+  },
+
+  reorderGroups(groupIds: string[]): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_cli_reorder_groups", { groupIds });
+  },
+
+  checkConnection(groupId: string): Promise<StreamCheckResult> {
+    return invoke<StreamCheckResult>("copilot_cli_check_connection", {
+      groupId,
+    });
+  },
+};

@@ -529,6 +529,7 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
         AppType::GrokBuild
         | AppType::OpenCode
         | AppType::CopilotByok
+        | AppType::CopilotCli
         | AppType::OpenClaw
         | AppType::Hermes
         | AppType::Pi
@@ -605,6 +606,7 @@ pub(crate) fn remove_common_config_from_settings(
         AppType::GrokBuild
         | AppType::OpenCode
         | AppType::CopilotByok
+        | AppType::CopilotCli
         | AppType::OpenClaw
         | AppType::Hermes
         | AppType::Pi
@@ -666,6 +668,7 @@ fn apply_common_config_to_settings(
         AppType::GrokBuild
         | AppType::OpenCode
         | AppType::CopilotByok
+        | AppType::CopilotCli
         | AppType::OpenClaw
         | AppType::Hermes
         | AppType::Pi
@@ -1353,7 +1356,7 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
                 }
             }
         }
-        AppType::CopilotByok => {
+        AppType::CopilotByok | AppType::CopilotCli => {
             return Err(AppError::localized(
                 "copilot.live.use_catalog",
                 "VS Code Copilot 配置必须通过供应商目录同步",
@@ -1660,7 +1663,7 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
             Ok(config)
         }
         AppType::GrokBuild => crate::grok_config::read_grok_live_settings(),
-        AppType::CopilotByok => Err(AppError::localized(
+        AppType::CopilotByok | AppType::CopilotCli => Err(AppError::localized(
             "copilot.live.use_import",
             "请使用 VS Code Copilot 的“导入当前配置”功能",
             "Use Import Current Configuration in VS Code Copilot",
@@ -1811,7 +1814,7 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes | AppType::Pi => {
             unreachable!("additive mode apps are handled by early return")
         }
-        AppType::CopilotByok => {
+        AppType::CopilotByok | AppType::CopilotCli => {
             return Err(AppError::localized(
                 "copilot.live.use_import",
                 "请使用 VS Code Copilot 的“导入当前配置”功能",

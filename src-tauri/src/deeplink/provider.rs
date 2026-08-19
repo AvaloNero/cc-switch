@@ -67,7 +67,7 @@ pub fn import_provider_from_deeplink(
         .first()
         .ok_or_else(|| AppError::InvalidInput("Endpoint cannot be empty".to_string()))?;
 
-    if app_str == "copilot-byok" && all_endpoints.len() > 1 {
+    if matches!(app_str.as_str(), "copilot-byok" | "copilot-cli") && all_endpoints.len() > 1 {
         return Err(AppError::InvalidInput(
             "VS Code Copilot providers support one shared endpoint per provider group".to_string(),
         ));
@@ -115,7 +115,7 @@ pub fn import_provider_from_deeplink(
 
     let provider_id = provider.id.clone();
 
-    if matches!(app_type, AppType::CopilotByok) {
+    if matches!(app_type, AppType::CopilotByok | AppType::CopilotCli) {
         let mut group: crate::copilot_byok::CopilotByokGroup =
             serde_json::from_value(provider.settings_config.clone()).map_err(|error| {
                 AppError::InvalidInput(format!(
@@ -131,7 +131,11 @@ pub fn import_provider_from_deeplink(
         if provider.icon.is_some() {
             group.icon = provider.icon;
         }
-        crate::copilot_byok::upsert_group(state.db.as_ref(), group)?;
+        if matches!(app_type, AppType::CopilotCli) {
+            crate::copilot_byok::upsert_cli_group(state.db.as_ref(), group)?;
+        } else {
+            crate::copilot_byok::upsert_group(state.db.as_ref(), group)?;
+        }
         return Ok(provider_id);
     }
 
@@ -176,7 +180,7 @@ pub(crate) fn build_provider_from_request(
         AppType::Gemini => build_gemini_settings(request),
         AppType::GrokBuild => build_grokbuild_settings(request),
         AppType::OpenCode => build_opencode_settings(request),
-        AppType::CopilotByok => build_copilot_settings(request)?,
+        AppType::CopilotByok | AppType::CopilotCli => build_copilot_settings(request)?,
         AppType::OpenClaw => build_additive_app_settings(request),
         AppType::Hermes => build_hermes_settings(request),
         AppType::Pi => {
@@ -790,7 +794,7 @@ pub fn parse_and_merge_config(
         "openclaw" | "opencode" | "hermes" => {
             merge_additive_config(&mut merged, &config_value)?;
         }
-        "copilot-byok" => merge_copilot_config(&mut merged, &config_value)?,
+        "copilot-byok" | "copilot-cli" => merge_copilot_config(&mut merged, &config_value)?,
         "" => {
             // No app specified, skip merging
             return Ok(merged);

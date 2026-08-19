@@ -68,6 +68,7 @@ impl Database {
             enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
             enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
             enabled_copilot_byok BOOLEAN NOT NULL DEFAULT 0,
+            enabled_copilot_cli BOOLEAN NOT NULL DEFAULT 0,
             enabled_hermes BOOLEAN NOT NULL DEFAULT 0
         )",
             [],
@@ -98,6 +99,7 @@ impl Database {
             enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
             enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
             enabled_copilot_byok BOOLEAN NOT NULL DEFAULT 0,
+            enabled_copilot_cli BOOLEAN NOT NULL DEFAULT 0,
             enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
             installed_at INTEGER NOT NULL DEFAULT 0,
             content_hash TEXT,
@@ -544,6 +546,11 @@ impl Database {
                         );
                         Self::migrate_v17_to_v18(conn)?;
                         Self::set_user_version(conn, 18)?;
+                    }
+                    18 => {
+                        log::info!("迁移数据库从 v18 到 v19（Skills/MCP 添加 Copilot CLI 支持）");
+                        Self::migrate_v18_to_v19(conn)?;
+                        Self::set_user_version(conn, 19)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1589,6 +1596,27 @@ impl Database {
                 conn,
                 "skills",
                 "enabled_copilot_byok",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// v18 -> v19: persist Copilot CLI enablement independently from VS Code Copilot.
+    fn migrate_v18_to_v19(conn: &Connection) -> Result<(), AppError> {
+        if Self::table_exists(conn, "mcp_servers")? {
+            Self::add_column_if_missing(
+                conn,
+                "mcp_servers",
+                "enabled_copilot_cli",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
+        if Self::table_exists(conn, "skills")? {
+            Self::add_column_if_missing(
+                conn,
+                "skills",
+                "enabled_copilot_cli",
                 "BOOLEAN NOT NULL DEFAULT 0",
             )?;
         }
@@ -3475,6 +3503,33 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!((mcp_enabled, skill_enabled), (0, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v18_to_v19_adds_copilot_cli_enablement_columns() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE mcp_servers (id TEXT PRIMARY KEY);
+             CREATE TABLE skills (id TEXT PRIMARY KEY);
+             INSERT INTO mcp_servers (id) VALUES ('mcp-1');
+             INSERT INTO skills (id) VALUES ('skill-1');",
+        )?;
+        Database::set_user_version(&conn, 18)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        assert!(Database::has_column(
+            &conn,
+            "mcp_servers",
+            "enabled_copilot_cli"
+        )?);
+        assert!(Database::has_column(
+            &conn,
+            "skills",
+            "enabled_copilot_cli"
+        )?);
         Ok(())
     }
 }

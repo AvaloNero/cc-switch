@@ -27,7 +27,20 @@ static OPERATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 // provider row. Keep the portable BYOK catalog in its own provider namespace
 // so statistics and configuration can never overwrite or parse each other.
 const CATALOG_APP_TYPE: &str = "copilot-byok-catalog";
+const CLI_CATALOG_APP_TYPE: &str = "copilot-cli-catalog";
 const LEGACY_CATALOG_APP_TYPE: &str = "copilot-byok";
+
+/// Resolve GitHub Copilot CLI's home directory. `COPILOT_HOME` is honored so
+/// portable/test installations use the same location as the CLI itself.
+pub(crate) fn copilot_cli_home() -> Result<PathBuf, AppError> {
+    if let Some(path) = std::env::var_os("COPILOT_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    {
+        return Ok(path);
+    }
+    Ok(crate::config::get_home_dir().join(".copilot"))
+}
 
 fn group_to_provider(group: &CopilotByokGroup, sort_index: usize) -> Result<Provider, AppError> {
     Ok(Provider {
@@ -86,21 +99,87 @@ fn migrate_legacy_database_catalog(db: &Database) -> Result<(), AppError> {
     Ok(())
 }
 
-fn load_catalog(db: &Database) -> Result<Vec<CopilotByokGroup>, AppError> {
-    migrate_legacy_database_catalog(db)?;
-    db.get_all_providers(CATALOG_APP_TYPE)?
+fn load_catalog_from(db: &Database, app_type: &str) -> Result<Vec<CopilotByokGroup>, AppError> {
+    let mut groups = db
+        .get_all_providers(app_type)?
         .values()
         .map(provider_to_group)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    store::normalize_groups(&mut groups)?;
+    Ok(groups)
 }
 
-fn persist_catalog(db: &Database, groups: &[CopilotByokGroup]) -> Result<(), AppError> {
-    let providers = groups
+fn load_catalog(db: &Database) -> Result<Vec<CopilotByokGroup>, AppError> {
+    migrate_legacy_database_catalog(db)?;
+    load_catalog_from(db, CATALOG_APP_TYPE)
+}
+
+fn load_cli_catalog(db: &Database) -> Result<Vec<CopilotByokGroup>, AppError> {
+    load_catalog_from(db, CLI_CATALOG_APP_TYPE)
+}
+
+fn persist_catalog_to(
+    db: &Database,
+    app_type: &str,
+    groups: &[CopilotByokGroup],
+) -> Result<(), AppError> {
+    let mut normalized = groups.to_vec();
+    store::normalize_groups(&mut normalized)?;
+    let providers = normalized
         .iter()
         .enumerate()
         .map(|(sort_index, group)| group_to_provider(group, sort_index))
         .collect::<Result<Vec<_>, _>>()?;
-    db.replace_provider_catalog(CATALOG_APP_TYPE, &providers)
+    db.replace_provider_catalog(app_type, &providers)
+}
+
+fn persist_catalog(db: &Database, groups: &[CopilotByokGroup]) -> Result<(), AppError> {
+    persist_catalog_to(db, CATALOG_APP_TYPE, groups)
+}
+
+fn persist_cli_catalog(db: &Database, groups: &[CopilotByokGroup]) -> Result<(), AppError> {
+    persist_catalog_to(db, CLI_CATALOG_APP_TYPE, groups)
+}
+
+fn collapse_cli_catalog_to_default_models(
+    groups: &mut [CopilotByokGroup],
+    selected_group_id: Option<&str>,
+    selected_model_id: Option<&str>,
+) -> bool {
+    let mut changed = false;
+    for group in groups {
+        let preferred_model_id = (selected_group_id == Some(group.id.as_str()))
+            .then_some(selected_model_id)
+            .flatten();
+        let preferred_index = preferred_model_id
+            .and_then(|model_id| group.models.iter().position(|model| model.id == model_id))
+            .or_else(|| group.models.iter().position(|model| model.enabled))
+            .unwrap_or(0);
+        let mut default_model = group.models[preferred_index].clone();
+        if group.models.len() != 1
+            || preferred_index != 0
+            || !group.enabled
+            || !default_model.enabled
+        {
+            changed = true;
+        }
+        group.enabled = true;
+        default_model.enabled = true;
+        group.models = vec![default_model];
+    }
+    changed
+}
+
+fn normalize_cli_group(group: &mut CopilotByokGroup) -> Result<(), AppError> {
+    group.normalize();
+    if group.models.len() != 1 {
+        return Err(AppError::InvalidInput(
+            "Copilot CLI providers must define exactly one default model".to_string(),
+        ));
+    }
+    group.enabled = true;
+    group.models[0].enabled = true;
+    group.validate()
 }
 
 fn load_runtime_store(db: &Database) -> Result<CopilotByokStore, AppError> {
@@ -118,6 +197,55 @@ fn load_runtime_store(db: &Database) -> Result<CopilotByokStore, AppError> {
         store::save_device_store(&local)?;
     }
     local.groups = load_catalog(db)?;
+    if !local.cli_catalog_initialized {
+        if load_cli_catalog(db)?.is_empty() && !local.groups.is_empty() {
+            // The pre-split implementation exposed the VS Code catalog to the
+            // CLI. Copy it once so existing selections survive, then let both
+            // catalogs evolve independently.
+            let mut cli_groups = local.groups.clone();
+            for group in &mut cli_groups {
+                // The historical shared implementation ignored VS Code's
+                // enabled flags when applying a CLI selection. Preserve that
+                // availability during the one-time catalog split.
+                group.enabled = true;
+                for model in &mut group.models {
+                    model.enabled = true;
+                }
+            }
+            persist_cli_catalog(db, &cli_groups)?;
+        }
+        local.cli_catalog_initialized = true;
+        store::save_device_store(&local)?;
+    }
+    let mut cli_groups = load_cli_catalog(db)?;
+    let catalog_changed = collapse_cli_catalog_to_default_models(
+        &mut cli_groups,
+        local.cli.selected_group_id.as_deref(),
+        local.cli.selected_model_id.as_deref(),
+    );
+    if catalog_changed {
+        // Keep enforcing the invariant after the one-time migration marker is
+        // set as an older cloud/database snapshot may reintroduce a multi-model
+        // CLI record on another device.
+        persist_cli_catalog(db, &cli_groups)?;
+    }
+    let mut device_state_changed = !local.cli_single_model_catalog_initialized;
+    if let Some(selected_group_id) = local.cli.selected_group_id.as_deref() {
+        if let Some(default_model) = cli_groups
+            .iter()
+            .find(|group| group.id == selected_group_id)
+            .and_then(|group| group.models.first())
+        {
+            if local.cli.selected_model_id.as_deref() != Some(default_model.id.as_str()) {
+                local.cli.selected_model_id = Some(default_model.id.clone());
+                device_state_changed = true;
+            }
+        }
+    }
+    local.cli_single_model_catalog_initialized = true;
+    if device_state_changed {
+        store::save_device_store(&local)?;
+    }
     store::normalize_store(&mut local)?;
     Ok(local)
 }
@@ -283,8 +411,9 @@ fn canonicalize_detected_target_ids(
         .collect()
 }
 
-fn build_state(store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
-    let cli = cli::get_state(&store, &store.groups)?;
+fn build_state(db: &Database, store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
+    let cli_groups = load_cli_catalog(db)?;
+    let cli = cli::get_state(&store, &cli_groups)?;
     let detected = vscode::discover_vscode_targets()?;
     let aliases = detected_target_aliases(&detected);
     let available_ids: HashSet<String> = detected
@@ -330,6 +459,21 @@ fn build_state(store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
     })
 }
 
+fn build_cli_state(db: &Database, store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
+    let groups = load_cli_catalog(db)?;
+    let cli = cli::get_state(&store, &groups)?;
+    Ok(CopilotByokState {
+        managed_model_count: groups
+            .iter()
+            .map(CopilotByokGroup::enabled_model_count)
+            .sum(),
+        groups,
+        targets: Vec::new(),
+        selected_target_ids: Vec::new(),
+        cli,
+    })
+}
+
 fn sync_if_selected(store: &CopilotByokStore) -> Result<(), AppError> {
     let detected = vscode::discover_vscode_targets()?;
     let available_ids: HashSet<String> = detected
@@ -359,12 +503,17 @@ fn commit_and_build(
     overrides: sync::TransactionOverrides,
 ) -> Result<CopilotByokState, AppError> {
     sync::commit_store_update(current, updated, overrides, true)?;
-    build_state(load_runtime_store(db)?)
+    build_state(db, load_runtime_store(db)?)
 }
 
 pub fn get_state(db: &Database) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
-    build_state(load_runtime_store(db)?)
+    build_state(db, load_runtime_store(db)?)
+}
+
+pub fn get_cli_state(db: &Database) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    build_cli_state(db, load_runtime_store(db)?)
 }
 
 pub fn set_cli_selection(
@@ -374,17 +523,42 @@ pub fn set_cli_selection(
 ) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
     let mut store = load_runtime_store(db)?;
-    let groups = store.groups.clone();
+    let groups = load_cli_catalog(db)?;
     cli::apply(&mut store, &groups, group_id, model_id)?;
-    build_state(store)
+    build_cli_state(db, store)
+}
+
+pub fn set_cli_provider(db: &Database, group_id: &str) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    let mut store = load_runtime_store(db)?;
+    let groups = load_cli_catalog(db)?;
+    let group = groups
+        .iter()
+        .find(|group| group.id == group_id && group.enabled)
+        .ok_or_else(|| {
+            AppError::InvalidInput(format!("Unknown Copilot CLI provider: {group_id}"))
+        })?;
+    let model = group.models.first().ok_or_else(|| {
+        AppError::Config(format!(
+            "Copilot CLI provider {group_id} has no default model"
+        ))
+    })?;
+    if group.models.len() != 1 || !model.enabled {
+        return Err(AppError::Config(format!(
+            "Copilot CLI provider {group_id} must have exactly one enabled default model"
+        )));
+    }
+    let model_id = model.id.clone();
+    cli::apply(&mut store, &groups, group_id, &model_id)?;
+    build_cli_state(db, store)
 }
 
 pub fn disable_cli(db: &Database) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
     let mut store = load_runtime_store(db)?;
-    let groups = store.groups.clone();
+    let groups = load_cli_catalog(db)?;
     cli::disable(&mut store, &groups)?;
-    build_state(store)
+    build_cli_state(db, store)
 }
 
 pub fn sync_selected_on_startup(db: &Database) -> Result<(), AppError> {
@@ -407,6 +581,12 @@ pub(crate) fn sync_if_configured(db: &Database) -> Result<(), AppError> {
 pub(crate) fn usage_catalog(db: &Database) -> Result<Vec<CopilotByokGroup>, AppError> {
     let _guard = operation_guard()?;
     load_catalog(db)
+}
+
+pub(crate) fn cli_usage_catalog(db: &Database) -> Result<Vec<CopilotByokGroup>, AppError> {
+    let _guard = operation_guard()?;
+    load_runtime_store(db)?;
+    load_cli_catalog(db)
 }
 
 pub fn set_targets(db: &Database, target_ids: Vec<String>) -> Result<CopilotByokState, AppError> {
@@ -511,7 +691,6 @@ pub fn upsert_group(
     } else {
         updated.groups.push(group);
     }
-    cli::validate_selection(&updated)?;
     persist_catalog(db, &updated.groups)?;
     match commit_and_build(
         db,
@@ -537,7 +716,6 @@ pub fn delete_group(db: &Database, group_id: &str) -> Result<CopilotByokState, A
     let previous_groups = current.groups.clone();
     let mut updated = current.clone();
     updated.groups.retain(|group| group.id != group_id);
-    cli::validate_selection(&updated)?;
     persist_catalog(db, &updated.groups)?;
     match commit_and_build(
         db,
@@ -575,6 +753,80 @@ pub fn reorder_groups(db: &Database, group_ids: Vec<String>) -> Result<CopilotBy
             persist_catalog(db, &previous_groups).map_err(|rollback_error| {
                 AppError::Config(format!(
                     "{error}; failed to roll back VS Code Copilot catalog: {rollback_error}"
+                ))
+            })?;
+            Err(error)
+        }
+    }
+}
+
+pub fn upsert_cli_group(
+    db: &Database,
+    mut group: CopilotByokGroup,
+) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    normalize_cli_group(&mut group)?;
+    let store = load_runtime_store(db)?;
+    let previous_groups = load_cli_catalog(db)?;
+    let mut groups = previous_groups.clone();
+    if let Some(existing) = groups.iter_mut().find(|item| item.id == group.id) {
+        *existing = group;
+    } else {
+        groups.push(group);
+    }
+    store::normalize_groups(&mut groups)?;
+    cli::validate_selection(&store, &groups)?;
+    persist_cli_catalog(db, &groups)?;
+    match build_cli_state(db, store) {
+        Ok(state) => Ok(state),
+        Err(error) => {
+            persist_cli_catalog(db, &previous_groups).map_err(|rollback_error| {
+                AppError::Config(format!(
+                    "{error}; failed to roll back Copilot CLI catalog: {rollback_error}"
+                ))
+            })?;
+            Err(error)
+        }
+    }
+}
+
+pub fn delete_cli_group(db: &Database, group_id: &str) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    let store = load_runtime_store(db)?;
+    let previous_groups = load_cli_catalog(db)?;
+    let mut groups = previous_groups.clone();
+    groups.retain(|group| group.id != group_id);
+    cli::validate_selection(&store, &groups)?;
+    persist_cli_catalog(db, &groups)?;
+    match build_cli_state(db, store) {
+        Ok(state) => Ok(state),
+        Err(error) => {
+            persist_cli_catalog(db, &previous_groups).map_err(|rollback_error| {
+                AppError::Config(format!(
+                    "{error}; failed to roll back Copilot CLI catalog: {rollback_error}"
+                ))
+            })?;
+            Err(error)
+        }
+    }
+}
+
+pub fn reorder_cli_groups(
+    db: &Database,
+    group_ids: Vec<String>,
+) -> Result<CopilotByokState, AppError> {
+    let _guard = operation_guard()?;
+    let store = load_runtime_store(db)?;
+    let previous_groups = load_cli_catalog(db)?;
+    let mut groups = previous_groups.clone();
+    store::apply_group_order(&mut groups, &group_ids)?;
+    persist_cli_catalog(db, &groups)?;
+    match build_cli_state(db, store) {
+        Ok(state) => Ok(state),
+        Err(error) => {
+            persist_cli_catalog(db, &previous_groups).map_err(|rollback_error| {
+                AppError::Config(format!(
+                    "{error}; failed to roll back Copilot CLI catalog: {rollback_error}"
                 ))
             })?;
             Err(error)
@@ -812,6 +1064,106 @@ mod tests {
         assert_eq!(load_catalog(&db)?, vec![second]);
         assert!(db.get_provider_by_id("first", CATALOG_APP_TYPE)?.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn vscode_and_cli_provider_catalogs_are_independent() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let mut vscode = group("vscode", "VS Code Provider");
+        let mut vscode_second_model = vscode.models[0].clone();
+        vscode_second_model.id = "vscode:second".to_string();
+        vscode_second_model.model_id = "vscode-second-model".to_string();
+        vscode_second_model.name = "VS Code Second Model".to_string();
+        vscode.models.push(vscode_second_model);
+
+        let mut cli = group("cli", "CLI Provider");
+        let mut cli_second_model = cli.models[0].clone();
+        cli_second_model.id = "cli:second".to_string();
+        cli_second_model.model_id = "cli-second-model".to_string();
+        cli_second_model.name = "CLI Second Model".to_string();
+        cli.models.push(cli_second_model);
+
+        persist_catalog(&db, std::slice::from_ref(&vscode))?;
+        persist_cli_catalog(&db, std::slice::from_ref(&cli))?;
+
+        assert_eq!(load_catalog(&db)?, vec![vscode.clone()]);
+        assert_eq!(load_cli_catalog(&db)?, vec![cli.clone()]);
+
+        let mut migrated_cli = load_cli_catalog(&db)?;
+        assert!(collapse_cli_catalog_to_default_models(
+            &mut migrated_cli,
+            None,
+            None,
+        ));
+        persist_cli_catalog(&db, &migrated_cli)?;
+
+        let persisted_vscode = load_catalog(&db)?;
+        assert_eq!(persisted_vscode, vec![vscode.clone()]);
+        assert_eq!(persisted_vscode[0].models.len(), 2);
+        let persisted_cli = load_cli_catalog(&db)?;
+        assert_eq!(persisted_cli[0].models.len(), 1);
+        assert_eq!(persisted_cli[0].models[0].id, cli.models[0].id);
+
+        persist_cli_catalog(&db, &[])?;
+        assert_eq!(load_catalog(&db)?, vec![vscode]);
+        assert!(load_cli_catalog(&db)?.is_empty());
+        assert!(db
+            .get_provider_by_id("cli", CLI_CATALOG_APP_TYPE)?
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn cli_catalog_migration_keeps_one_default_model_per_provider() {
+        let mut selected = group("selected", "Selected");
+        let mut active_model = selected.models[0].clone();
+        active_model.id = "selected:active".to_string();
+        active_model.model_id = "active-model".to_string();
+        active_model.name = "Active Model".to_string();
+        selected.models.push(active_model);
+
+        let mut other = group("other", "Other");
+        other.enabled = false;
+        other.models[0].enabled = false;
+        let mut enabled_model = other.models[0].clone();
+        enabled_model.id = "other:enabled".to_string();
+        enabled_model.model_id = "enabled-model".to_string();
+        enabled_model.name = "Enabled Model".to_string();
+        enabled_model.enabled = true;
+        other.models.push(enabled_model);
+
+        let mut groups = vec![selected, other];
+        assert!(collapse_cli_catalog_to_default_models(
+            &mut groups,
+            Some("selected"),
+            Some("selected:active"),
+        ));
+        assert_eq!(groups[0].models.len(), 1);
+        assert_eq!(groups[0].models[0].id, "selected:active");
+        assert_eq!(groups[1].models.len(), 1);
+        assert_eq!(groups[1].models[0].id, "other:enabled");
+        assert!(groups.iter().all(|group| group.enabled));
+        assert!(groups.iter().all(|group| group.models[0].enabled));
+        assert!(!collapse_cli_catalog_to_default_models(
+            &mut groups,
+            Some("selected"),
+            Some("selected:active"),
+        ));
+    }
+
+    #[test]
+    fn cli_provider_requires_exactly_one_enabled_default_model() {
+        let mut multiple = group("multiple", "Multiple");
+        multiple.models.push(multiple.models[0].clone());
+        let error = normalize_cli_group(&mut multiple).expect_err("multiple models must fail");
+        assert!(error.to_string().contains("exactly one default model"));
+
+        let mut single = group("single", "Single");
+        single.enabled = false;
+        single.models[0].enabled = false;
+        normalize_cli_group(&mut single).expect("single model should normalize");
+        assert!(single.enabled);
+        assert!(single.models[0].enabled);
     }
 
     #[test]

@@ -9,10 +9,11 @@ use crate::services::usage_stats::effective_usage_log_filter;
 use chrono::{Duration, Local, TimeZone};
 
 const VSCODE_SESSION_DATA_SOURCE: &str = "vscode_session";
+const COPILOT_CLI_SESSION_DATA_SOURCE: &str = "copilot_cli_session";
 
 fn prune_eligible_filter(alias: &str) -> String {
     format!(
-        "COALESCE(NULLIF(TRIM({alias}.data_source), ''), 'proxy') != '{VSCODE_SESSION_DATA_SOURCE}'"
+        "COALESCE(NULLIF(TRIM({alias}.data_source), ''), 'proxy') NOT IN ('{VSCODE_SESSION_DATA_SOURCE}', '{COPILOT_CLI_SESSION_DATA_SOURCE}')"
     )
 }
 

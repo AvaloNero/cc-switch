@@ -35,6 +35,12 @@ pub fn prompt_file_paths(app: &AppType) -> Result<Vec<PathBuf>, AppError> {
         });
     }
 
+    if matches!(app, AppType::CopilotCli) {
+        return Ok(vec![
+            crate::copilot_byok::copilot_cli_home()?.join("copilot-instructions.md")
+        ]);
+    }
+
     let base_dir: PathBuf = match app {
         AppType::Claude => get_base_dir_with_fallback(get_claude_settings_path(), ".claude")?,
         AppType::Codex => get_base_dir_with_fallback(get_codex_auth_path(), ".codex")?,
@@ -42,6 +48,7 @@ pub fn prompt_file_paths(app: &AppType) -> Result<Vec<PathBuf>, AppError> {
         AppType::GrokBuild => crate::grok_config::get_grok_config_dir(),
         AppType::OpenCode => get_opencode_dir(),
         AppType::CopilotByok => unreachable!("handled above"),
+        AppType::CopilotCli => unreachable!("handled above"),
         AppType::OpenClaw => get_openclaw_dir(),
         AppType::Hermes => crate::hermes_config::get_hermes_dir(),
         AppType::Pi => crate::pi_config::get_pi_agent_dir()?,
@@ -54,6 +61,7 @@ pub fn prompt_file_paths(app: &AppType) -> Result<Vec<PathBuf>, AppError> {
         AppType::Gemini => "GEMINI.md",
         AppType::GrokBuild | AppType::OpenCode | AppType::OpenClaw => "AGENTS.md",
         AppType::CopilotByok => unreachable!("handled above"),
+        AppType::CopilotCli => unreachable!("handled above"),
         AppType::Hermes => "SOUL.md",
         AppType::Pi => "AGENTS.md",
         AppType::ClaudeDesktop => unreachable!("handled above"),

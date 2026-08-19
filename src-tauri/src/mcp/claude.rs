@@ -94,6 +94,7 @@ pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, AppError
                         grokbuild: false,
                         opencode: false,
                         copilot_byok: false,
+                        copilot_cli: false,
                         hermes: false,
                     },
                     description: None,

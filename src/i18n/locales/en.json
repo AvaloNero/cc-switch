@@ -914,7 +914,9 @@
     "hermes": "Hermes",
     "pi": "Pi",
     "copilotByok": "VS Code Copilot",
-    "copilot-byok": "VS Code Copilot"
+    "copilot-byok": "VS Code Copilot",
+    "copilotCli": "Copilot CLI",
+    "copilot-cli": "Copilot CLI"
   },
   "pi": {
     "empty": {
@@ -1653,25 +1655,51 @@
     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
   },
   "copilotByok": {
-    "description": "Manage a shared custom-provider catalog for VS Code Copilot and Copilot CLI.",
+    "description": "Manage custom model providers independently for VS Code Copilot.",
     "cli": {
       "title": "Copilot CLI",
-      "description": "Choose one provider and model to expose through the Windows user environment.",
+      "description": "Choose a provider and persist its single default model for newly opened Copilot CLI terminal sessions.",
+      "instructions": "Custom Instructions",
+      "catalogDescription": "Each provider has one default model. Activate a provider to switch Copilot CLI directly; there is no separate model selector. This catalog is independent from VS Code Copilot.",
+      "catalogSaved": "Copilot CLI provider saved",
+      "catalogDeleted": "Copilot CLI provider deleted",
+      "confirmDelete": "Delete this Copilot CLI provider? Active providers must be switched or restored before deletion.",
       "provider": "Provider",
       "model": "Model",
+      "defaultModel": "Default Model",
       "apply": "Apply to Copilot CLI",
       "disable": "Restore Original Environment",
       "active": "Active",
       "inactive": "Not Configured",
       "needsApply": "Needs Apply",
-      "unsupported": "Windows Only",
-      "restart": "The change applies to newly opened CMD or PowerShell sessions. Fully restart Windows Terminal if necessary.",
-      "security": "The API key and saved original values are stored as plaintext in the Windows user environment and device-local state. Newly started processes inherit the active values.",
+      "unsupported": "Not Supported",
+      "restart": "Open a new terminal after switching. On Windows, fully restart Windows Terminal if needed; on macOS/Linux, start a new shell so the managed profile hook is loaded.",
+      "security": "Provider credentials are stored in the CC Switch provider database and may be included in configured backups or cloud sync. Active values are also written as plaintext to the Windows user environment or private shell files; newly started processes inherit them.",
       "conflict": "Managed environment variables were changed outside CC Switch. They will not be overwritten automatically.",
       "applySuccess": "Copilot CLI environment updated. Open a new terminal to use it.",
-      "disableSuccess": "The original Copilot CLI environment was restored."
+      "disableSuccess": "The original Copilot CLI environment was restored.",
+      "form": {
+        "defaultModel": "Default Model",
+        "defaultModelHint": "Each Copilot CLI provider can define exactly one model. Switching providers uses this model directly.",
+        "advanced": "Advanced Model Routing and Token Settings",
+        "providerType": "Copilot Provider Type",
+        "providerOpenAi": "OpenAI Compatible",
+        "providerAzure": "Azure OpenAI",
+        "providerAnthropic": "Anthropic",
+        "bearerToken": "Bearer Token (Optional, Overrides API Key)",
+        "transport": "Responses Transport",
+        "transportHttp": "HTTP",
+        "transportWebSockets": "WebSockets",
+        "azureApiVersion": "Azure API Version (Optional)",
+        "modelRouting": "Copilot CLI Model Routing",
+        "baseModelId": "Well-known Base Model ID (Optional)",
+        "wireModel": "Provider Wire Model (Optional)",
+        "modelRoutingHint": "Leave both blank to use the model ID above. Set a known base model for Copilot behavior and a wire model when the provider expects a deployment or alias name.",
+        "securityTitle": "Credential Storage",
+        "security": "Credentials are stored in the independent Copilot CLI provider catalog. When applied, active values are also exported through the user environment on Windows or private CC Switch shell files on macOS/Linux."
+      }
     },
-    "loading": "Reading VS Code configuration…",
+    "loading": "Reading Copilot configuration…",
     "targets": "Sync Targets",
     "targetsDescription": "Choose the VS Code profiles whose chatLanguageModels.json files are managed by CC Switch. Changes are synchronized automatically.",
     "optInTitle": "No profile is currently managed",
@@ -1799,7 +1827,8 @@
       "opencode": "OpenCode",
       "grokbuild": "Grok Build",
       "pi": "Pi",
-      "copilot-byok": "VS Code Copilot"
+      "copilot-byok": "VS Code Copilot",
+      "copilot-cli": "Copilot CLI"
     },
     "rawInputLabel": "Raw",
     "rebuildCodex": {

@@ -22,6 +22,9 @@ const skillsPanelMocks = vi.hoisted(() => ({
 const copilotByokMocks = vi.hoisted(() => ({
   openAdd: vi.fn(),
 }));
+const copilotCliMocks = vi.hoisted(() => ({
+  openAdd: vi.fn(),
+}));
 
 vi.mock("sonner", () => ({
   toast: {
@@ -143,6 +146,9 @@ vi.mock("@/components/AppSwitcher", () => ({
       <button onClick={() => onSwitch("codex")}>switch-codex</button>
       <button onClick={() => onSwitch("openclaw")}>switch-openclaw</button>
       <button onClick={() => onSwitch("copilot-byok")}>switch-copilot</button>
+      <button onClick={() => onSwitch("copilot-cli")}>
+        switch-copilot-cli
+      </button>
     </div>
   ),
 }));
@@ -157,6 +163,18 @@ vi.mock("@/components/settings/CopilotByokSettings", async () => {
   });
   MockCopilotByokSettings.displayName = "MockCopilotByokSettings";
   return { CopilotByokSettings: MockCopilotByokSettings };
+});
+
+vi.mock("@/components/settings/CopilotCliSettings", async () => {
+  const React = await import("react");
+  const MockCopilotCliSettings = React.forwardRef((_props: any, ref) => {
+    React.useImperativeHandle(ref, () => ({
+      openAdd: copilotCliMocks.openAdd,
+    }));
+    return <div data-testid="copilot-cli-settings" />;
+  });
+  MockCopilotCliSettings.displayName = "MockCopilotCliSettings";
+  return { CopilotCliSettings: MockCopilotCliSettings };
 });
 
 vi.mock("@/components/settings/SettingsPage", () => ({
@@ -240,6 +258,7 @@ describe("App integration with MSW", () => {
     skillsPanelMocks.checkUpdates.mockReset();
     skillsPanelMocks.openDiscovery.mockReset();
     copilotByokMocks.openAdd.mockReset();
+    copilotCliMocks.openAdd.mockReset();
     localStorage.removeItem("cc-switch-last-view");
     localStorage.removeItem("cc-switch-last-app");
   });
@@ -262,7 +281,7 @@ describe("App integration with MSW", () => {
       "copilot-byok",
     );
     expect(screen.getByTestId("app-switcher")).toBeInTheDocument();
-    expect(document.querySelector('button[title="使用统计"]')).toBeNull();
+    expect(document.querySelector('button[title="使用统计"]')).not.toBeNull();
     const syncTargetsButton = await screen.findByTitle("copilotByok.targets");
     for (const title of [
       "skills.manage",
@@ -305,6 +324,53 @@ describe("App integration with MSW", () => {
     expect(await screen.findByTestId("session-manager-page")).toHaveAttribute(
       "data-app-id",
       "copilot-byok",
+    );
+  }, 10_000);
+
+  it("opens Copilot CLI as an independent primary page with first-class tools", async () => {
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    fireEvent.click(await screen.findByText("switch-copilot-cli"));
+
+    expect(
+      await screen.findByTestId("copilot-cli-settings"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("app-switcher")).toHaveTextContent("copilot-cli");
+    expect(document.querySelector('button[title="使用统计"]')).not.toBeNull();
+    await waitFor(() =>
+      expect(
+        document.querySelector(
+          'button[title="自定义指令"], button[title="Custom Instructions"], button[title="copilotByok.cli.instructions"]',
+        ),
+      ).not.toBeNull(),
+    );
+    expect(
+      document.querySelector('button[title="skills.manage"]'),
+    ).not.toBeNull();
+    expect(
+      document.querySelector('button[title="sessionManager.title"]'),
+    ).not.toBeNull();
+    expect(document.querySelector('button[title="mcp.title"]')).not.toBeNull();
+    expect(
+      document.querySelector('button[title="copilotByok.targets"]'),
+    ).toBeNull();
+
+    const addCli = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="provider.addNewProvider"]',
+    );
+    expect(addCli).not.toBeNull();
+    fireEvent.click(addCli!);
+    expect(copilotCliMocks.openAdd).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>(
+        'button[title="sessionManager.title"]',
+      )!,
+    );
+    expect(await screen.findByTestId("session-manager-page")).toHaveAttribute(
+      "data-app-id",
+      "copilot-cli",
     );
   }, 10_000);
 

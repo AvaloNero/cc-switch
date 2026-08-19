@@ -17,6 +17,7 @@ const ENDPOINT_TIMEOUT_SECS: Record<AppId, number> = {
   grokbuild: 12,
   opencode: 8,
   "copilot-byok": 8,
+  "copilot-cli": 8,
   openclaw: 8,
   hermes: 8,
   pi: 8,

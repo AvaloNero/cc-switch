@@ -5,7 +5,12 @@ import type { SettingsFormState } from "@/hooks/useSettings";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string) => (key === "apps.copilotByok" ? "VS Code Copilot" : key),
+    t: (key: string) =>
+      key === "apps.copilotByok"
+        ? "VS Code Copilot"
+        : key === "apps.copilotCli"
+          ? "Copilot CLI"
+          : key,
   }),
 }));
 
@@ -51,6 +56,7 @@ describe("AppVisibilitySettings", () => {
             hermes: true,
             pi: true,
             copilotByok: false,
+            copilotCli: true,
           },
         }}
         onChange={onChange}
@@ -61,6 +67,22 @@ describe("AppVisibilitySettings", () => {
 
     expect(onChange).toHaveBeenCalledWith({
       visibleApps: expect.objectContaining({ copilotByok: true }),
+    });
+  });
+
+  it("toggles Copilot CLI without changing VS Code Copilot visibility", () => {
+    const onChange = vi.fn();
+    render(
+      <AppVisibilitySettings settings={baseSettings} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copilot CLI" }));
+
+    expect(onChange).toHaveBeenCalledWith({
+      visibleApps: expect.objectContaining({
+        copilotByok: true,
+        copilotCli: false,
+      }),
     });
   });
 });

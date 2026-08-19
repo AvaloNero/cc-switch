@@ -287,4 +287,100 @@ describe("CopilotByokGroupPanel", () => {
       }),
     );
   });
+
+  it("shows Copilot CLI provider controls and CLI-specific credential guidance", () => {
+    render(
+      <CopilotByokGroupPanel
+        catalogApp="copilot-cli"
+        open
+        group={null}
+        saving={false}
+        onOpenChange={vi.fn()}
+        onSave={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(
+      screen.getByText("copilotByok.cli.form.providerType"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("copilotByok.cli.form.bearerToken"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("copilotByok.cli.form.transport"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("copilotByok.cli.form.azureApiVersion"),
+    ).toBeDisabled();
+    expect(
+      screen.getByText("copilotByok.cli.form.securityTitle"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("copilotByok.cli.form.security"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("copilotByok.securityTitle"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("copilotByok.cli.form.defaultModel"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("copilotByok.cli.form.defaultModelHint"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "opencode.addModel" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "opencode.toggleModelDetails" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("copilotByok.cli.form.advanced"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("copilotByok.cli.form.modelRouting"),
+    ).toBeInTheDocument();
+  });
+
+  it("saves exactly one Copilot CLI default model", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CopilotByokGroupPanel
+        catalogApp="copilot-cli"
+        open
+        group={null}
+        saving={false}
+        onOpenChange={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("provider.name"), {
+      target: { value: "MiniMax" },
+    });
+    fireEvent.change(screen.getByLabelText("opencode.baseUrl"), {
+      target: { value: "https://api.minimax.io/v1" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("copilotByok.cli.form.defaultModel"),
+      { target: { value: "MiniMax-M3" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "provider.addToConfig" }),
+    );
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "MiniMax",
+        enabled: true,
+        models: [
+          expect.objectContaining({
+            modelId: "MiniMax-M3",
+            name: "MiniMax-M3",
+            enabled: true,
+          }),
+        ],
+      }),
+    );
+  });
 });

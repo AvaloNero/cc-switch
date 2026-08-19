@@ -25,6 +25,7 @@ export const APP_IDS: AppId[] = [
   "grokbuild",
   "opencode",
   "copilot-byok",
+  "copilot-cli",
   "openclaw",
   "hermes",
   "pi",
@@ -38,6 +39,7 @@ export const DEFAULT_VISIBLE_APPS: VisibleApps = {
   grokbuild: true,
   opencode: true,
   copilotByok: true,
+  copilotCli: true,
   openclaw: true,
   hermes: true,
   pi: true,
@@ -51,6 +53,7 @@ export const SKILLS_APP_IDS: AppId[] = [
   "grokbuild",
   "opencode",
   "copilot-byok",
+  "copilot-cli",
   "hermes",
   "pi",
 ];
@@ -97,6 +100,7 @@ export const MCP_APP_IDS: McpAppId[] = [
   "grokbuild",
   "opencode",
   "copilot-byok",
+  "copilot-cli",
   "hermes",
 ];
 
@@ -181,6 +185,21 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
       "bg-blue-500/10 ring-1 ring-blue-500/20 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400",
     badgeClass:
       "bg-blue-500/10 text-blue-700 dark:text-blue-300 hover:bg-blue-500/20 border-0 gap-1.5",
+  },
+  "copilot-cli": {
+    label: "Copilot CLI",
+    icon: (
+      <ProviderIcon
+        icon="githubcopilot"
+        name="Copilot CLI"
+        size={14}
+        showFallback={false}
+      />
+    ),
+    activeClass:
+      "bg-slate-500/10 ring-1 ring-slate-500/20 hover:bg-slate-500/20 text-slate-700 dark:text-slate-300",
+    badgeClass:
+      "bg-slate-500/10 text-slate-700 dark:text-slate-300 hover:bg-slate-500/20 border-0 gap-1.5",
   },
   openclaw: {
     label: "OpenClaw",

@@ -34,7 +34,6 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  SquareTerminal,
   Trash2,
   Unplug,
   X,
@@ -47,18 +46,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
 import { ProviderActions } from "@/components/providers/ProviderActions";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { copilotByokApi } from "@/lib/api";
+import { copilotByokApi, copilotCliApi } from "@/lib/api";
 import type {
   CopilotByokGroup,
   CopilotByokState,
@@ -76,8 +68,8 @@ type BusyAction =
   | "sync"
   | "remove"
   | "reorder"
-  | "cli"
   | "cli-disable"
+  | `cli-apply:${string}`
   | `import:${string}`
   | `restore:${string}`
   | `custom-remove:${string}`
@@ -85,7 +77,9 @@ type BusyAction =
 
 interface CopilotByokSettingsProps {
   mode: "catalog" | "targets";
+  catalogApp?: "copilot-byok" | "copilot-cli";
   onOpenWebsite?: (url: string) => void;
+  onStateChange?: (state: CopilotByokState) => void;
 }
 
 export interface CopilotByokSettingsHandle {
@@ -104,11 +98,16 @@ function targetTitle(
 }
 
 interface SortableCopilotGroupCardProps {
+  appId: "copilot-byok" | "copilot-cli";
   group: CopilotByokGroup;
+  selected: boolean;
+  active: boolean;
+  needsApply: boolean;
   disabled: boolean;
   testing: boolean;
   onEnable: () => void;
   onDisable: () => void;
+  onSelect: () => void;
   onEdit: () => void;
   onDuplicate: () => void;
   onTest: () => void;
@@ -117,11 +116,16 @@ interface SortableCopilotGroupCardProps {
 }
 
 function SortableCopilotGroupCard({
+  appId,
   group,
+  selected,
+  active,
+  needsApply,
   disabled,
   testing,
   onEnable,
   onDisable,
+  onSelect,
   onEdit,
   onDuplicate,
   onTest,
@@ -141,6 +145,8 @@ function SortableCopilotGroupCard({
     group.notes?.trim() || group.websiteUrl?.trim() || group.url;
   const link =
     group.websiteUrl?.trim() || (!group.notes?.trim() ? group.url : null);
+  const defaultModel = group.models[0];
+  const isCli = appId === "copilot-cli";
 
   return (
     <div
@@ -148,14 +154,15 @@ function SortableCopilotGroupCard({
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn(
         "group relative overflow-hidden rounded-xl border border-border bg-card p-4 text-card-foreground transition-all duration-300 hover:border-border-active hover:shadow-sm",
-        group.enabled && "border-blue-500/60 shadow-sm shadow-blue-500/10",
+        (isCli ? selected : group.enabled || selected) &&
+          "border-blue-500/60 shadow-sm shadow-blue-500/10",
         isDragging && "z-10 scale-105 cursor-grabbing border-primary shadow-lg",
       )}
     >
       <div
         className={cn(
           "pointer-events-none absolute inset-0 bg-gradient-to-r from-blue-500/10 to-transparent transition-opacity duration-500",
-          group.enabled ? "opacity-100" : "opacity-0",
+          (isCli ? selected : group.enabled) ? "opacity-100" : "opacity-0",
         )}
       />
       <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -186,7 +193,26 @@ function SortableCopilotGroupCard({
               <h3 className="text-base font-semibold leading-none">
                 {group.name}
               </h3>
+              {active && (
+                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                  {t("provider.inUse")}
+                </Badge>
+              )}
+              {needsApply && (
+                <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                  {t("copilotByok.cli.needsApply")}
+                </Badge>
+              )}
             </div>
+            {isCli && defaultModel ? (
+              <p
+                className="truncate text-sm font-medium text-foreground/80"
+                title={`${defaultModel.name} · ${defaultModel.modelId}`}
+              >
+                {t("copilotByok.cli.defaultModel")}: {defaultModel.name} ·{" "}
+                {defaultModel.modelId}
+              </p>
+            ) : null}
             {link ? (
               <button
                 type="button"
@@ -213,18 +239,27 @@ function SortableCopilotGroupCard({
           </div>
         </div>
 
-        <div className="pointer-events-none ml-auto flex flex-shrink-0 items-center gap-1.5 opacity-0 transition-opacity duration-200 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
+        <div
+          className={cn(
+            "ml-auto flex flex-shrink-0 items-center gap-1.5 transition-opacity duration-200",
+            isCli
+              ? "pointer-events-auto opacity-100"
+              : "pointer-events-none opacity-0 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100",
+          )}
+        >
           <ProviderActions
-            appId="copilot-byok"
-            isCurrent={false}
+            appId={appId}
+            isCurrent={active}
             isInConfig={group.enabled}
             isTesting={testing}
-            onSwitch={onEnable}
-            onRemoveFromConfig={onDisable}
+            onSwitch={isCli ? onSelect : onEnable}
+            onRemoveFromConfig={isCli ? undefined : onDisable}
             onEdit={onEdit}
             onDuplicate={onDuplicate}
             onTest={onTest}
             onDelete={onDelete}
+            isRemovalProtected={selected}
+            isDeletionProtected={selected}
           />
         </div>
       </div>
@@ -235,9 +270,14 @@ function SortableCopilotGroupCard({
 export const CopilotByokSettings = forwardRef<
   CopilotByokSettingsHandle,
   CopilotByokSettingsProps
->(function CopilotByokSettings({ mode, onOpenWebsite }, ref) {
+>(function CopilotByokSettings(
+  { mode, catalogApp = "copilot-byok", onOpenWebsite, onStateChange },
+  ref,
+) {
   const { t } = useTranslation();
   const catalogOnly = mode === "catalog";
+  const isCliCatalog = catalogApp === "copilot-cli";
+  const catalogApi = isCliCatalog ? copilotCliApi : copilotByokApi;
   const copy = {
     title: t("apps.copilotByok"),
     description: t("copilotByok.description"),
@@ -277,9 +317,13 @@ export const CopilotByokSettings = forwardRef<
     changedFiles: t("copilotByok.changedFiles"),
     readError: t("copilotByok.readError"),
     saveModelSuccess: t("copilotByok.saveModelSuccess"),
-    saveModelLocalSuccess: t("copilotByok.saveModelLocalSuccess"),
+    saveModelLocalSuccess: isCliCatalog
+      ? t("copilotByok.cli.catalogSaved")
+      : t("copilotByok.saveModelLocalSuccess"),
     deleteModelSuccess: t("copilotByok.deleteModelSuccess"),
-    deleteModelLocalSuccess: t("copilotByok.deleteModelLocalSuccess"),
+    deleteModelLocalSuccess: isCliCatalog
+      ? t("copilotByok.cli.catalogDeleted")
+      : t("copilotByok.deleteModelLocalSuccess"),
     targetUpdateSuccess: t("copilotByok.targetUpdateSuccess"),
     syncSuccess: t("copilotByok.syncSuccess"),
     stopSuccess: t("copilotByok.stopSuccess"),
@@ -287,23 +331,10 @@ export const CopilotByokSettings = forwardRef<
     restoreNoop: t("copilotByok.restoreNoop"),
     customAdded: t("copilotByok.customAdded"),
     customRemoved: t("copilotByok.customRemoved"),
-    confirmDelete: t("copilotByok.confirmDelete"),
+    confirmDelete: isCliCatalog
+      ? t("copilotByok.cli.confirmDelete")
+      : t("copilotByok.confirmDelete"),
     confirmStop: t("copilotByok.confirmStop"),
-    cliTitle: t("copilotByok.cli.title"),
-    cliDescription: t("copilotByok.cli.description"),
-    cliProvider: t("copilotByok.cli.provider"),
-    cliModel: t("copilotByok.cli.model"),
-    cliApply: t("copilotByok.cli.apply"),
-    cliDisable: t("copilotByok.cli.disable"),
-    cliActive: t("copilotByok.cli.active"),
-    cliInactive: t("copilotByok.cli.inactive"),
-    cliNeedsApply: t("copilotByok.cli.needsApply"),
-    cliUnsupported: t("copilotByok.cli.unsupported"),
-    cliRestart: t("copilotByok.cli.restart"),
-    cliSecurity: t("copilotByok.cli.security"),
-    cliConflict: t("copilotByok.cli.conflict"),
-    cliApplySuccess: t("copilotByok.cli.applySuccess"),
-    cliDisableSuccess: t("copilotByok.cli.disableSuccess"),
   };
   const [state, setState] = useState<CopilotByokState | null>(null);
   const [busy, setBusy] = useState<BusyAction>("load");
@@ -313,8 +344,6 @@ export const CopilotByokSettings = forwardRef<
   );
   const [customName, setCustomName] = useState("");
   const [customPath, setCustomPath] = useState("");
-  const [cliGroupId, setCliGroupId] = useState("");
-  const [cliModelId, setCliModelId] = useState("");
   const [testingGroupId, setTestingGroupId] = useState<string | null>(null);
   const [pendingDeleteGroup, setPendingDeleteGroup] =
     useState<CopilotByokGroup | null>(null);
@@ -328,13 +357,20 @@ export const CopilotByokSettings = forwardRef<
       coordinateGetter: sortableKeyboardCoordinates,
     }),
   );
+  const commitState = useCallback(
+    (next: CopilotByokState) => {
+      setState(next);
+      onStateChange?.(next);
+    },
+    [onStateChange],
+  );
 
   const load = useCallback(
     async (showToast = false) => {
       setBusy("load");
       try {
-        const next = await copilotByokApi.getState();
-        setState(next);
+        const next = await catalogApi.getState();
+        commitState(next);
         if (showToast) toast.success(copy.refresh);
       } catch (error) {
         console.error("[CopilotByokSettings] Failed to load", error);
@@ -343,27 +379,12 @@ export const CopilotByokSettings = forwardRef<
         setBusy(null);
       }
     },
-    [copy.refresh],
+    [catalogApi, commitState, copy.refresh],
   );
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    if (!state) return;
-    const groupId =
-      state.cli.selectedGroupId ??
-      state.groups.find((group) => group.models.length > 0)?.id ??
-      "";
-    const group = state.groups.find((item) => item.id === groupId);
-    const modelId =
-      state.cli.selectedGroupId === groupId
-        ? (state.cli.selectedModelId ?? group?.models[0]?.id ?? "")
-        : (group?.models[0]?.id ?? "");
-    setCliGroupId(groupId);
-    setCliModelId(modelId);
-  }, [state]);
 
   useEffect(() => {
     if (!catalogOnly) return;
@@ -394,11 +415,6 @@ export const CopilotByokSettings = forwardRef<
   const selectedTargets = useMemo(
     () => state?.targets.filter((target) => target.selected) ?? [],
     [state],
-  );
-
-  const selectedCliGroup = useMemo(
-    () => state?.groups.find((group) => group.id === cliGroupId) ?? null,
-    [cliGroupId, state?.groups],
   );
 
   const filteredGroups = useMemo(() => {
@@ -439,7 +455,7 @@ export const CopilotByokSettings = forwardRef<
         ? [...new Set([...state.selectedTargetIds, targetId])]
         : state.selectedTargetIds.filter((id) => id !== targetId);
       const next = await copilotByokApi.setTargets(nextIds);
-      setState(next);
+      commitState(next);
       toast.success(copy.targetUpdateSuccess);
     } catch (error) {
       toast.error(String(error));
@@ -456,7 +472,7 @@ export const CopilotByokSettings = forwardRef<
         customPath.trim(),
         customName.trim() || null,
       );
-      setState(next);
+      commitState(next);
       setCustomName("");
       setCustomPath("");
       toast.success(copy.customAdded);
@@ -472,7 +488,7 @@ export const CopilotByokSettings = forwardRef<
     setBusy(`custom-remove:${target.id}`);
     try {
       const next = await copilotByokApi.removeCustomTarget(target.id);
-      setState(next);
+      commitState(next);
       toast.success(copy.customRemoved);
     } catch (error) {
       toast.error(String(error));
@@ -482,11 +498,11 @@ export const CopilotByokSettings = forwardRef<
   };
 
   const saveGroup = async (group: CopilotByokGroup) => {
-    const shouldSync = selectedTargets.length > 0;
+    const shouldSync = !isCliCatalog && selectedTargets.length > 0;
     setBusy("group");
     try {
-      const next = await copilotByokApi.upsertGroup(group);
-      setState(next);
+      const next = await catalogApi.upsertGroup(group);
+      commitState(next);
       setEditorOpen(false);
       toast.success(
         shouldSync ? copy.saveModelSuccess : copy.saveModelLocalSuccess,
@@ -503,8 +519,36 @@ export const CopilotByokSettings = forwardRef<
     if (busy) return;
     setBusy("group");
     try {
-      const next = await copilotByokApi.upsertGroup({ ...group, enabled });
-      setState(next);
+      const next = await catalogApi.upsertGroup({ ...group, enabled });
+      commitState(next);
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const selectCliGroup = async (group: CopilotByokGroup) => {
+    if (!isCliCatalog || busy) return;
+    setBusy(`cli-apply:${group.id}`);
+    try {
+      const next = await copilotCliApi.setSelection(group.id);
+      commitState(next);
+      toast.success(t("copilotByok.cli.applySuccess"));
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const disableCli = async () => {
+    if (!isCliCatalog || busy) return;
+    setBusy("cli-disable");
+    try {
+      const next = await copilotCliApi.disable();
+      commitState(next);
+      toast.success(t("copilotByok.cli.disableSuccess"));
     } catch (error) {
       toast.error(String(error));
     } finally {
@@ -520,11 +564,11 @@ export const CopilotByokSettings = forwardRef<
   const confirmDeleteGroup = async () => {
     const group = pendingDeleteGroup;
     if (!group || busy) return;
-    const shouldSync = selectedTargets.length > 0;
+    const shouldSync = !isCliCatalog && selectedTargets.length > 0;
     setBusy("group");
     try {
-      const next = await copilotByokApi.deleteGroup(group.id);
-      setState(next);
+      const next = await catalogApi.deleteGroup(group.id);
+      commitState(next);
       setPendingDeleteGroup(null);
       toast.success(
         shouldSync ? copy.deleteModelSuccess : copy.deleteModelLocalSuccess,
@@ -561,10 +605,10 @@ export const CopilotByokSettings = forwardRef<
           id: crypto.randomUUID(),
         })),
       };
-      const added = await copilotByokApi.upsertGroup(duplicate);
-      setState(added);
+      const added = await catalogApi.upsertGroup(duplicate);
+      commitState(added);
       toast.success(
-        selectedTargets.length > 0
+        !isCliCatalog && selectedTargets.length > 0
           ? copy.saveModelSuccess
           : copy.saveModelLocalSuccess,
       );
@@ -579,7 +623,7 @@ export const CopilotByokSettings = forwardRef<
     if (testingGroupId) return;
     setTestingGroupId(group.id);
     try {
-      const result = await copilotByokApi.checkConnection(group.id);
+      const result = await catalogApi.checkConnection(group.id);
       if (result.status === "operational") {
         toast.success(
           t("streamCheck.reachable", {
@@ -629,10 +673,10 @@ export const CopilotByokSettings = forwardRef<
     setState({ ...state, groups: reordered });
     setBusy("reorder");
     try {
-      const next = await copilotByokApi.reorderGroups(
+      const next = await catalogApi.reorderGroups(
         reordered.map((group) => group.id),
       );
-      setState(next);
+      commitState(next);
       toast.success(t("provider.sortUpdated"));
     } catch (error) {
       setState((current) =>
@@ -694,7 +738,7 @@ export const CopilotByokSettings = forwardRef<
     setBusy("remove");
     try {
       const next = await copilotByokApi.setTargets([]);
-      setState(next);
+      commitState(next);
       setStopConfirmOpen(false);
       toast.success(copy.stopSuccess);
     } catch (error) {
@@ -713,34 +757,6 @@ export const CopilotByokSettings = forwardRef<
       await load();
     } catch (error) {
       toast.error(String(error));
-      setBusy(null);
-    }
-  };
-
-  const applyCliSelection = async () => {
-    if (!state?.cli.supported || !cliGroupId || !cliModelId || busy) return;
-    setBusy("cli");
-    try {
-      const next = await copilotByokApi.setCliSelection(cliGroupId, cliModelId);
-      setState(next);
-      toast.success(copy.cliApplySuccess);
-    } catch (error) {
-      toast.error(String(error));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const disableCli = async () => {
-    if (!state?.cli.supported || !state.cli.enabled || busy) return;
-    setBusy("cli-disable");
-    try {
-      const next = await copilotByokApi.disableCli();
-      setState(next);
-      toast.success(copy.cliDisableSuccess);
-    } catch (error) {
-      toast.error(String(error));
-    } finally {
       setBusy(null);
     }
   };
@@ -770,6 +786,7 @@ export const CopilotByokSettings = forwardRef<
 
   const groupEditor = (
     <CopilotByokGroupPanel
+      catalogApp={catalogApp}
       open={editorOpen}
       group={editingGroup}
       saving={busy === "group"}
@@ -805,6 +822,95 @@ export const CopilotByokSettings = forwardRef<
   if (catalogOnly) {
     return (
       <>
+        {isCliCatalog ? (
+          <div className="space-y-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold">
+                  {t("provider.tabProvider")}
+                </h3>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {t("copilotByok.cli.catalogDescription")}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {state.cli.enabled ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    disabled={Boolean(busy)}
+                    onClick={() => void disableCli()}
+                  >
+                    {busy === "cli-disable" ? (
+                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                    )}
+                    {t("copilotByok.cli.disable")}
+                  </Button>
+                ) : null}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={Boolean(busy)}
+                  onClick={() => void load(true)}
+                  aria-label={copy.refresh}
+                >
+                  <RefreshCw
+                    className={
+                      busy === "load" ? "h-4 w-4 animate-spin" : "h-4 w-4"
+                    }
+                  />
+                </Button>
+              </div>
+            </div>
+
+            {state.cli.enabled ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs">
+                <ProviderIcon
+                  icon="githubcopilot"
+                  name="Copilot CLI"
+                  size={15}
+                  showFallback={false}
+                />
+                <Badge
+                  variant={
+                    state.cli.environmentMatches ? "secondary" : "outline"
+                  }
+                  className="h-5 px-1.5 text-[10px]"
+                >
+                  {state.cli.environmentMatches
+                    ? t("copilotByok.cli.active")
+                    : t("copilotByok.cli.needsApply")}
+                </Badge>
+                <span className="font-medium">
+                  {state.cli.selectedProviderName}
+                </span>
+                {state.cli.selectedModelName ? (
+                  <span className="text-muted-foreground">
+                    · {state.cli.selectedModelName}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+
+            {state.cli.environmentConflicts.length > 0 ? (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>{t("copilotByok.cli.conflict")}</AlertTitle>
+                <AlertDescription className="break-all font-mono text-xs">
+                  {state.cli.environmentConflicts.join(", ")}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            <div className="space-y-1 text-[11px] leading-4 text-muted-foreground">
+              <p>{t("copilotByok.cli.restart")}</p>
+              <p>{t("copilotByok.cli.security")}</p>
+            </div>
+          </div>
+        ) : null}
         <div className="mt-4 space-y-3">
           <AnimatePresence>
             {isSearchOpen && (
@@ -858,7 +964,7 @@ export const CopilotByokSettings = forwardRef<
 
           {state.groups.length === 0 ? (
             <ProviderEmptyState
-              appId="copilot-byok"
+              appId={catalogApp}
               onCreate={openAdd}
               onImport={
                 importTarget
@@ -884,11 +990,30 @@ export const CopilotByokSettings = forwardRef<
                   {filteredGroups.map((group) => (
                     <SortableCopilotGroupCard
                       key={group.id}
+                      appId={catalogApp}
                       group={group}
+                      selected={Boolean(
+                        isCliCatalog &&
+                          state.cli.enabled &&
+                          state.cli.selectedGroupId === group.id,
+                      )}
+                      active={Boolean(
+                        isCliCatalog &&
+                          state.cli.enabled &&
+                          state.cli.selectedGroupId === group.id &&
+                          state.cli.environmentMatches,
+                      )}
+                      needsApply={Boolean(
+                        isCliCatalog &&
+                          state.cli.enabled &&
+                          state.cli.selectedGroupId === group.id &&
+                          !state.cli.environmentMatches,
+                      )}
                       disabled={Boolean(busy)}
                       testing={testingGroupId === group.id}
                       onEnable={() => void toggleGroup(group, true)}
                       onDisable={() => void toggleGroup(group, false)}
+                      onSelect={() => void selectCliGroup(group)}
                       onEdit={() => {
                         if (busy) return;
                         setEditingGroup(group);
@@ -911,12 +1036,6 @@ export const CopilotByokSettings = forwardRef<
     );
   }
 
-  const cliDraftMatches =
-    state.cli.enabled &&
-    state.cli.selectedGroupId === cliGroupId &&
-    state.cli.selectedModelId === cliModelId &&
-    state.cli.environmentMatches;
-
   return (
     <div className="space-y-3">
       {selectedTargets.length === 0 ? (
@@ -932,151 +1051,6 @@ export const CopilotByokSettings = forwardRef<
           </div>
         </div>
       ) : null}
-
-      <section
-        aria-labelledby="copilot-byok-cli"
-        className="overflow-hidden rounded-xl border border-border bg-card"
-      >
-        <div className="flex flex-col gap-3 border-b border-border/60 px-4 py-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <SquareTerminal className="h-4 w-4 text-muted-foreground" />
-              <h3
-                id="copilot-byok-cli"
-                className="text-base font-semibold leading-none"
-              >
-                {copy.cliTitle}
-              </h3>
-              <Badge
-                variant={cliDraftMatches ? "secondary" : "outline"}
-                className="h-5 px-1.5 text-[10px] font-medium"
-              >
-                {!state.cli.supported
-                  ? copy.cliUnsupported
-                  : cliDraftMatches
-                    ? copy.cliActive
-                    : state.cli.enabled
-                      ? copy.cliNeedsApply
-                      : copy.cliInactive}
-              </Badge>
-            </div>
-            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
-              {copy.cliDescription}
-            </p>
-          </div>
-        </div>
-
-        <div className="space-y-4 px-5 py-5">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label className="text-xs font-medium text-muted-foreground">
-                {copy.cliProvider}
-              </Label>
-              <Select
-                value={cliGroupId}
-                disabled={Boolean(busy) || !state.cli.supported}
-                onValueChange={(value) => {
-                  const group = state.groups.find((item) => item.id === value);
-                  setCliGroupId(value);
-                  setCliModelId(group?.models[0]?.id ?? "");
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={copy.cliProvider} />
-                </SelectTrigger>
-                <SelectContent>
-                  {state.groups.map((group) => (
-                    <SelectItem
-                      key={group.id}
-                      value={group.id}
-                      disabled={group.models.length === 0}
-                    >
-                      {group.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs font-medium text-muted-foreground">
-                {copy.cliModel}
-              </Label>
-              <Select
-                value={cliModelId}
-                disabled={
-                  Boolean(busy) || !state.cli.supported || !selectedCliGroup
-                }
-                onValueChange={setCliModelId}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={copy.cliModel} />
-                </SelectTrigger>
-                <SelectContent>
-                  {selectedCliGroup?.models.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.name} · {model.modelId}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {state.cli.environmentConflicts.length > 0 ? (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>{copy.cliConflict}</AlertTitle>
-              <AlertDescription className="break-all font-mono text-xs">
-                {state.cli.environmentConflicts.join(", ")}
-              </AlertDescription>
-            </Alert>
-          ) : null}
-
-          <div className="space-y-1 text-[11px] leading-4 text-muted-foreground">
-            <p>{copy.cliRestart}</p>
-            <p>{copy.cliSecurity}</p>
-          </div>
-
-          <div className="flex flex-wrap justify-end gap-2">
-            {state.cli.enabled ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
-                disabled={Boolean(busy) || !state.cli.supported}
-                onClick={() => void disableCli()}
-              >
-                {busy === "cli-disable" ? (
-                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RotateCcw className="mr-2 h-3.5 w-3.5" />
-                )}
-                {copy.cliDisable}
-              </Button>
-            ) : null}
-            <Button
-              size="sm"
-              className="h-8 text-xs"
-              disabled={
-                Boolean(busy) ||
-                !state.cli.supported ||
-                !cliGroupId ||
-                !cliModelId ||
-                cliDraftMatches
-              }
-              onClick={() => void applyCliSelection()}
-            >
-              {busy === "cli" ? (
-                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <SquareTerminal className="mr-2 h-3.5 w-3.5" />
-              )}
-              {copy.cliApply}
-            </Button>
-          </div>
-        </div>
-      </section>
 
       <section
         aria-labelledby="copilot-byok-targets"

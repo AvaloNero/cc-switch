@@ -78,6 +78,10 @@ const TITLE_THEMES: Record<AppType | "all", TitleTheme> = {
     accent: "text-blue-600 dark:text-blue-400",
     iconBg: "bg-blue-500/10",
   },
+  "copilot-cli": {
+    accent: "text-slate-700 dark:text-slate-300",
+    iconBg: "bg-slate-500/10",
+  },
 };
 
 /**

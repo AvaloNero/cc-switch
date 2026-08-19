@@ -14,7 +14,7 @@ export { proxyApi } from "./proxy";
 export { openclawApi } from "./openclaw";
 export { sessionsApi } from "./sessions";
 export { workspaceApi } from "./workspace";
-export { copilotByokApi } from "./copilotByok";
+export { copilotByokApi, copilotCliApi } from "./copilotByok";
 export * as configApi from "./config";
 export * as authApi from "./auth";
 export * as copilotApi from "./copilot";

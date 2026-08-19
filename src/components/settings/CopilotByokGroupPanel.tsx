@@ -69,6 +69,31 @@ const EDIT_TOOLS: CopilotByokEditTool[] = [
   "code-rewrite",
 ];
 
+type CopilotCatalogApp = "copilot-byok" | "copilot-cli";
+const CLI_PROVIDER_TYPE_KEY = "ccSwitchCopilotCliProviderType";
+const CLI_BEARER_TOKEN_KEY = "ccSwitchCopilotCliBearerToken";
+const CLI_TRANSPORT_KEY = "ccSwitchCopilotCliTransport";
+const CLI_AZURE_API_VERSION_KEY = "ccSwitchCopilotCliAzureApiVersion";
+const CLI_MODEL_ID_KEY = "ccSwitchCopilotCliModelId";
+const CLI_WIRE_MODEL_KEY = "ccSwitchCopilotCliWireModel";
+
+const extraText = (extra: Record<string, unknown>, key: string): string => {
+  const value = extra[key];
+  return typeof value === "string" ? value : "";
+};
+
+const updateExtra = (
+  extra: Record<string, unknown>,
+  key: string,
+  value: string,
+): Record<string, unknown> => {
+  const next = { ...extra };
+  const normalized = value.trim();
+  if (normalized) next[key] = normalized;
+  else delete next[key];
+  return next;
+};
+
 type DraftModel = Omit<
   CopilotByokModel,
   | "toolCalling"
@@ -232,6 +257,7 @@ function toDraft(group: CopilotByokGroup | null): DraftGroup {
 }
 
 interface CopilotByokGroupPanelProps {
+  catalogApp?: CopilotCatalogApp;
   open: boolean;
   group: CopilotByokGroup | null;
   saving: boolean;
@@ -240,6 +266,7 @@ interface CopilotByokGroupPanelProps {
 }
 
 export function CopilotByokGroupPanel({
+  catalogApp = "copilot-byok",
   open,
   group,
   saving,
@@ -247,6 +274,7 @@ export function CopilotByokGroupPanel({
   onSave,
 }: CopilotByokGroupPanelProps) {
   const { t } = useTranslation();
+  const isCli = catalogApp === "copilot-cli";
   const copy = {
     addTitle: t("provider.addNewProvider"),
     editTitle: t("provider.editProvider"),
@@ -255,8 +283,12 @@ export function CopilotByokGroupPanel({
     urlPlaceholder: t("copilotByok.form.urlPlaceholder"),
     apiType: t("copilotByok.form.apiType"),
     apiKey: t("copilotByok.form.apiKey"),
-    securityTitle: t("copilotByok.securityTitle"),
-    security: t("copilotByok.security"),
+    securityTitle: isCli
+      ? t("copilotByok.cli.form.securityTitle")
+      : t("copilotByok.securityTitle"),
+    security: isCli
+      ? t("copilotByok.cli.form.security")
+      : t("copilotByok.security"),
     sharedConnection: t("opencode.baseUrlHint"),
     headers: t("opencode.headers"),
     headersDescription: t("opencode.headersHint"),
@@ -297,6 +329,22 @@ export function CopilotByokGroupPanel({
     save: t("common.save"),
     duplicateModelId: t("opencode.providerKeyDuplicate"),
     invalidOptions: t("jsonEditor.mustBeObject"),
+    cliProviderType: t("copilotByok.cli.form.providerType"),
+    cliProviderOpenAi: t("copilotByok.cli.form.providerOpenAi"),
+    cliProviderAzure: t("copilotByok.cli.form.providerAzure"),
+    cliProviderAnthropic: t("copilotByok.cli.form.providerAnthropic"),
+    cliBearerToken: t("copilotByok.cli.form.bearerToken"),
+    cliTransport: t("copilotByok.cli.form.transport"),
+    cliTransportHttp: t("copilotByok.cli.form.transportHttp"),
+    cliTransportWebSockets: t("copilotByok.cli.form.transportWebSockets"),
+    cliAzureApiVersion: t("copilotByok.cli.form.azureApiVersion"),
+    cliModelRouting: t("copilotByok.cli.form.modelRouting"),
+    cliDefaultModel: t("copilotByok.cli.form.defaultModel"),
+    cliDefaultModelHint: t("copilotByok.cli.form.defaultModelHint"),
+    cliAdvanced: t("copilotByok.cli.form.advanced"),
+    cliBaseModelId: t("copilotByok.cli.form.baseModelId"),
+    cliWireModel: t("copilotByok.cli.form.wireModel"),
+    cliModelRoutingHint: t("copilotByok.cli.form.modelRoutingHint"),
   };
   const [draft, setDraft] = useState<DraftGroup>(emptyGroup);
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
@@ -309,13 +357,21 @@ export function CopilotByokGroupPanel({
   useEffect(() => {
     if (!open) return;
     const next = toDraft(group);
+    if (isCli) {
+      const defaultModel =
+        next.models.find((model) => model.enabled) ??
+        next.models[0] ??
+        emptyModel();
+      next.enabled = true;
+      next.models = [{ ...defaultModel, enabled: true }];
+    }
     setDraft(next);
     setExpandedModels(new Set());
     setFetchedModels([]);
     setModelsDevCatalog(null);
     setIsFetchingModels(false);
     setError(null);
-  }, [group, open]);
+  }, [group, isCli, open]);
 
   const handleFetchModels = useCallback(() => {
     const baseUrl = draft.url.trim();
@@ -382,11 +438,15 @@ export function CopilotByokGroupPanel({
       draft.name.trim().length > 0 &&
       draft.url.trim().length > 0 &&
       draft.models.length > 0 &&
+      (!isCli || draft.models.length === 1) &&
       draft.models.every(
         (model) => model.modelId.trim() && model.name.trim(),
       ) &&
+      (!isCli ||
+        extraText(draft.extra, CLI_TRANSPORT_KEY) !== "websockets" ||
+        draft.apiType === "responses") &&
       !saving,
-    [draft, saving],
+    [draft, isCli, saving],
   );
 
   const updateGroup = <K extends keyof DraftGroup>(
@@ -408,6 +468,27 @@ export function CopilotByokGroupPanel({
       return next;
     });
 
+  const updateGroupExtra = (key: string, value: string) =>
+    setDraft((current) => ({
+      ...current,
+      extra: updateExtra(current.extra, key, value),
+    }));
+
+  const updateCliProviderType = (value: string) =>
+    setDraft((current) => {
+      const apiType: CopilotByokApiType =
+        value === "anthropic"
+          ? "messages"
+          : current.apiType === "messages"
+            ? "chat-completions"
+            : current.apiType;
+      return {
+        ...current,
+        apiType,
+        extra: updateExtra(current.extra, CLI_PROVIDER_TYPE_KEY, value),
+      };
+    });
+
   const updateModel = <K extends keyof DraftModel>(
     id: string,
     key: K,
@@ -417,6 +498,16 @@ export function CopilotByokGroupPanel({
       ...current,
       models: current.models.map((model) =>
         model.id === id ? { ...model, [key]: value } : model,
+      ),
+    }));
+
+  const updateModelExtra = (id: string, key: string, value: string) =>
+    setDraft((current) => ({
+      ...current,
+      models: current.models.map((model) =>
+        model.id === id
+          ? { ...model, extra: updateExtra(model.extra, key, value) }
+          : model,
       ),
     }));
 
@@ -510,7 +601,8 @@ export function CopilotByokGroupPanel({
   const handleSave = async () => {
     setError(null);
     try {
-      const normalizedIds = draft.models.map((model) =>
+      const sourceModels = isCli ? draft.models.slice(0, 1) : draft.models;
+      const normalizedIds = sourceModels.map((model) =>
         model.modelId.trim().toLowerCase(),
       );
       if (new Set(normalizedIds).size !== normalizedIds.length) {
@@ -521,7 +613,7 @@ export function CopilotByokGroupPanel({
           ([key]) => !key.startsWith(PROVIDER_HEADER_DRAFT_PREFIX),
         ),
       );
-      const models: CopilotByokModel[] = draft.models.map((model) => {
+      const models: CopilotByokModel[] = sourceModels.map((model) => {
         const supportsReasoningEffort = [
           ...new Set(
             model.reasoningEffortsText
@@ -607,9 +699,11 @@ export function CopilotByokGroupPanel({
         notes: draft.notes?.trim() || null,
         icon: draft.icon?.trim() || null,
         iconColor: draft.iconColor?.trim() || null,
-        enabled: draft.enabled,
+        enabled: isCli ? true : draft.enabled,
         requestHeaders,
-        models,
+        models: isCli
+          ? models.map((model) => ({ ...model, enabled: true }))
+          : models,
       });
     } catch (saveError) {
       setError(
@@ -622,6 +716,12 @@ export function CopilotByokGroupPanel({
     event.preventDefault();
     if (canSave) void handleSave();
   };
+
+  const cliProviderType =
+    extraText(draft.extra, CLI_PROVIDER_TYPE_KEY) ||
+    (draft.apiType === "messages" ? "anthropic" : "openai");
+  const cliTransport = extraText(draft.extra, CLI_TRANSPORT_KEY) || "http";
+  const cliDefaultModel = draft.models[0];
 
   const footer = (
     <>
@@ -692,13 +792,46 @@ export function CopilotByokGroupPanel({
           }}
         />
 
+        {isCli && (
+          <div className="space-y-2">
+            <Label htmlFor="copilot-cli-provider-type">
+              {copy.cliProviderType}
+            </Label>
+            <Select
+              value={cliProviderType}
+              onValueChange={updateCliProviderType}
+            >
+              <SelectTrigger id="copilot-cli-provider-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="openai">{copy.cliProviderOpenAi}</SelectItem>
+                <SelectItem value="azure">{copy.cliProviderAzure}</SelectItem>
+                <SelectItem value="anthropic">
+                  {copy.cliProviderAnthropic}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         <div className="space-y-2">
           <Label htmlFor="copilot-byok-api-type">{copy.apiType}</Label>
           <Select
             value={draft.apiType}
-            onValueChange={(value) =>
-              updateGroup("apiType", value as CopilotByokApiType)
-            }
+            onValueChange={(value) => {
+              const apiType = value as CopilotByokApiType;
+              updateGroup("apiType", apiType);
+              if (isCli && apiType === "messages") {
+                updateGroupExtra(CLI_PROVIDER_TYPE_KEY, "anthropic");
+              } else if (
+                isCli &&
+                apiType !== "messages" &&
+                cliProviderType === "anthropic"
+              ) {
+                updateGroupExtra(CLI_PROVIDER_TYPE_KEY, "openai");
+              }
+            }}
           >
             <SelectTrigger id="copilot-byok-api-type">
               <SelectValue />
@@ -719,6 +852,61 @@ export function CopilotByokGroupPanel({
           value={draft.apiKey}
           onChange={(value) => updateGroup("apiKey", value)}
         />
+
+        {isCli && (
+          <>
+            <ApiKeyInput
+              id="copilot-cli-bearer-token"
+              label={copy.cliBearerToken}
+              value={extraText(draft.extra, CLI_BEARER_TOKEN_KEY)}
+              onChange={(value) =>
+                updateGroupExtra(CLI_BEARER_TOKEN_KEY, value)
+              }
+            />
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="copilot-cli-transport">
+                  {copy.cliTransport}
+                </Label>
+                <Select
+                  value={cliTransport}
+                  onValueChange={(value) =>
+                    updateGroupExtra(CLI_TRANSPORT_KEY, value)
+                  }
+                >
+                  <SelectTrigger id="copilot-cli-transport">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="http">
+                      {copy.cliTransportHttp}
+                    </SelectItem>
+                    <SelectItem value="websockets">
+                      {copy.cliTransportWebSockets}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="copilot-cli-azure-api-version">
+                  {copy.cliAzureApiVersion}
+                </Label>
+                <Input
+                  id="copilot-cli-azure-api-version"
+                  value={extraText(draft.extra, CLI_AZURE_API_VERSION_KEY)}
+                  onChange={(event) =>
+                    updateGroupExtra(
+                      CLI_AZURE_API_VERSION_KEY,
+                      event.target.value,
+                    )
+                  }
+                  disabled={cliProviderType !== "azure"}
+                  placeholder="2024-10-21"
+                />
+              </div>
+            </div>
+          </>
+        )}
 
         <Alert>
           <AlertCircle className="h-4 w-4" />
@@ -754,17 +942,24 @@ export function CopilotByokGroupPanel({
           removeAriaLabel={copy.removeHeader}
         />
 
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <Label>{copy.models}</Label>
-            <div className="flex gap-1">
+        {isCli && cliDefaultModel ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <Label htmlFor="copilot-cli-default-model">
+                  {copy.cliDefaultModel}
+                </Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {copy.cliDefaultModelHint}
+                </p>
+              </div>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 onClick={handleFetchModels}
                 disabled={isFetchingModels}
-                className="h-7 gap-1"
+                className="h-7 shrink-0 gap-1"
               >
                 {isFetchingModels ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -773,260 +968,458 @@ export function CopilotByokGroupPanel({
                 )}
                 {t("providerForm.fetchModels")}
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={addModel}
-                className="h-7 gap-1"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                {copy.addModel}
-              </Button>
             </div>
-          </div>
 
-          <div className="space-y-2">
-            <div className="mb-1 flex items-center gap-2 px-1 text-xs text-muted-foreground">
-              <span className="w-9" />
-              <span className="flex-1">{copy.modelId}</span>
-              <span className="flex-1">{copy.modelName}</span>
-              <span className="w-[4.75rem] text-center">{copy.enabled}</span>
-              <span className="w-9" />
+            <div className="flex min-w-0 gap-1">
+              <Input
+                id="copilot-cli-default-model"
+                value={cliDefaultModel.modelId}
+                onChange={(event) =>
+                  updateModelId(cliDefaultModel.id, event.target.value)
+                }
+                placeholder={copy.modelIdPlaceholder}
+                className="min-w-0 flex-1"
+              />
+              {fetchedModels.length > 0 ? (
+                <ModelDropdown
+                  models={fetchedModels}
+                  onSelect={(id) =>
+                    updateModelId(
+                      cliDefaultModel.id,
+                      id,
+                      fetchedModels.find((item) => item.id === id),
+                    )
+                  }
+                />
+              ) : null}
             </div>
-            {draft.models.map((model) => (
-              <div key={model.id} className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => toggleExpanded(model.id)}
-                    aria-label={copy.modelDetails}
-                    className="h-9 w-9 shrink-0"
-                  >
-                    <ChevronRight
-                      className={cn(
-                        "h-4 w-4 transition-transform",
-                        expandedModels.has(model.id) && "rotate-90",
-                      )}
-                    />
-                  </Button>
-                  <div className="flex min-w-0 flex-1 gap-1">
-                    <Input
-                      value={model.modelId}
-                      onChange={(event) =>
-                        updateModelId(model.id, event.target.value)
-                      }
-                      placeholder={copy.modelIdPlaceholder}
-                      className="min-w-0 flex-1"
-                    />
-                    {fetchedModels.length > 0 && (
-                      <ModelDropdown
-                        models={fetchedModels}
-                        onSelect={(id) =>
-                          updateModelId(
-                            model.id,
-                            id,
-                            fetchedModels.find((item) => item.id === id),
+
+            <details className="group rounded-lg border border-border bg-muted/20">
+              <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
+                {copy.cliAdvanced}
+              </summary>
+              <div className="space-y-4 border-t border-border px-4 py-4">
+                <div className="space-y-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {copy.cliModelRouting}
+                  </span>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">
+                        {copy.cliBaseModelId}
+                      </Label>
+                      <Input
+                        value={extraText(
+                          cliDefaultModel.extra,
+                          CLI_MODEL_ID_KEY,
+                        )}
+                        onChange={(event) =>
+                          updateModelExtra(
+                            cliDefaultModel.id,
+                            CLI_MODEL_ID_KEY,
+                            event.target.value,
+                          )
+                        }
+                        placeholder={cliDefaultModel.modelId}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">
+                        {copy.cliWireModel}
+                      </Label>
+                      <Input
+                        value={extraText(
+                          cliDefaultModel.extra,
+                          CLI_WIRE_MODEL_KEY,
+                        )}
+                        onChange={(event) =>
+                          updateModelExtra(
+                            cliDefaultModel.id,
+                            CLI_WIRE_MODEL_KEY,
+                            event.target.value,
+                          )
+                        }
+                        placeholder={cliDefaultModel.modelId}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {copy.cliModelRoutingHint}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {copy.tokenLimits}
+                  </span>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">
+                        {copy.maxInput}
+                      </Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={cliDefaultModel.maxInputTokens ?? ""}
+                        placeholder={copy.automatic}
+                        onChange={(event) =>
+                          updateModel(
+                            cliDefaultModel.id,
+                            "maxInputTokens",
+                            event.target.value
+                              ? parsePositiveInteger(event.target.value)
+                              : null,
                           )
                         }
                       />
-                    )}
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">
+                        {copy.maxOutput}
+                      </Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={cliDefaultModel.maxOutputTokens ?? ""}
+                        placeholder={copy.automatic}
+                        onChange={(event) =>
+                          updateModel(
+                            cliDefaultModel.id,
+                            "maxOutputTokens",
+                            event.target.value
+                              ? parsePositiveInteger(event.target.value)
+                              : null,
+                          )
+                        }
+                      />
+                    </div>
                   </div>
-                  <Input
-                    value={model.name}
-                    onChange={(event) =>
-                      updateModel(model.id, "name", event.target.value)
-                    }
-                    placeholder={copy.modelNamePlaceholder}
-                    className="min-w-0 flex-1"
-                  />
-                  <div className="flex w-[4.75rem] justify-center">
-                    <Switch
-                      checked={model.enabled}
-                      onCheckedChange={(checked) =>
-                        updateModel(model.id, "enabled", checked)
-                      }
-                      aria-label={`${model.name || model.modelId} ${copy.enabled}`}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => removeModel(model.id)}
-                    disabled={draft.models.length === 1}
-                    className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
                 </div>
-
-                {expandedModels.has(model.id) && (
-                  <div className="ml-9 space-y-4 border-l-2 border-muted pl-4">
-                    <div className="space-y-2">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        {copy.tokenLimits}
-                      </span>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                        <div className="space-y-1">
-                          <Label className="text-xs text-muted-foreground">
-                            {copy.context}
-                          </Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            value={model.contextWindow ?? ""}
-                            placeholder={copy.automatic}
-                            onChange={(event) =>
-                              updateModel(
-                                model.id,
-                                "contextWindow",
-                                parsePositiveInteger(event.target.value),
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs text-muted-foreground">
-                            {copy.maxInput}
-                          </Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            value={model.maxInputTokens ?? ""}
-                            placeholder={copy.automatic}
-                            onChange={(event) =>
-                              updateModel(
-                                model.id,
-                                "maxInputTokens",
-                                event.target.value
-                                  ? parsePositiveInteger(event.target.value)
-                                  : null,
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs text-muted-foreground">
-                            {copy.maxOutput}
-                          </Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            value={model.maxOutputTokens ?? ""}
-                            placeholder={copy.automatic}
-                            onChange={(event) =>
-                              updateModel(
-                                model.id,
-                                "maxOutputTokens",
-                                parsePositiveInteger(event.target.value),
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        {copy.capabilities}
-                      </span>
-                      <div className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
-                        {(
-                          [
-                            ["toolCalling", copy.toolCalling],
-                            ["vision", copy.vision],
-                            ["thinking", copy.thinking],
-                            ["streaming", copy.streaming],
-                            ["zeroDataRetentionEnabled", copy.zeroData],
-                          ] as const
-                        ).map(([key, label]) => (
-                          <label
-                            key={key}
-                            className="flex items-center justify-between gap-3 text-sm"
-                          >
-                            <span>{label}</span>
-                            <Switch
-                              checked={model[key] ?? false}
-                              onCheckedChange={(checked) =>
-                                updateModel(model.id, key, checked)
-                              }
-                            />
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        {copy.editTools}
-                      </span>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        {EDIT_TOOLS.map((tool) => (
-                          <label
-                            key={tool}
-                            className="flex items-center gap-2 text-sm"
-                          >
-                            <Checkbox
-                              checked={model.editTools.includes(tool)}
-                              onCheckedChange={(checked) =>
-                                toggleEditTool(model, tool, checked === true)
-                              }
-                            />
-                            <span>{tool}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                      <div className="space-y-1">
-                        <Label className="text-xs text-muted-foreground">
-                          {copy.reasoning}
-                        </Label>
-                        <Input
-                          value={model.reasoningEffortsText}
-                          onChange={(event) =>
-                            updateModel(
-                              model.id,
-                              "reasoningEffortsText",
-                              event.target.value,
-                            )
-                          }
-                          placeholder={copy.reasoningPlaceholder}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-muted-foreground">
-                          {copy.modelOptions}
-                        </Label>
-                        <Textarea
-                          value={model.modelOptionsText}
-                          onChange={(event) =>
-                            updateModel(
-                              model.id,
-                              "modelOptionsText",
-                              event.target.value,
-                            )
-                          }
-                          rows={3}
-                          className="font-mono text-xs"
-                          spellCheck={false}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
-            ))}
+            </details>
           </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label>{copy.models}</Label>
+              <div className="flex gap-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleFetchModels}
+                  disabled={isFetchingModels}
+                  className="h-7 gap-1"
+                >
+                  {isFetchingModels ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5" />
+                  )}
+                  {t("providerForm.fetchModels")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addModel}
+                  className="h-7 gap-1"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {copy.addModel}
+                </Button>
+              </div>
+            </div>
 
-          <p className="text-xs text-muted-foreground">
-            {copy.modelDescription}
-          </p>
-        </div>
+            <div className="space-y-2">
+              <div className="mb-1 flex items-center gap-2 px-1 text-xs text-muted-foreground">
+                <span className="w-9" />
+                <span className="flex-1">{copy.modelId}</span>
+                <span className="flex-1">{copy.modelName}</span>
+                <span className="w-[4.75rem] text-center">{copy.enabled}</span>
+                <span className="w-9" />
+              </div>
+              {draft.models.map((model) => (
+                <div key={model.id} className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => toggleExpanded(model.id)}
+                      aria-label={copy.modelDetails}
+                      className="h-9 w-9 shrink-0"
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "h-4 w-4 transition-transform",
+                          expandedModels.has(model.id) && "rotate-90",
+                        )}
+                      />
+                    </Button>
+                    <div className="flex min-w-0 flex-1 gap-1">
+                      <Input
+                        value={model.modelId}
+                        onChange={(event) =>
+                          updateModelId(model.id, event.target.value)
+                        }
+                        placeholder={copy.modelIdPlaceholder}
+                        className="min-w-0 flex-1"
+                      />
+                      {fetchedModels.length > 0 && (
+                        <ModelDropdown
+                          models={fetchedModels}
+                          onSelect={(id) =>
+                            updateModelId(
+                              model.id,
+                              id,
+                              fetchedModels.find((item) => item.id === id),
+                            )
+                          }
+                        />
+                      )}
+                    </div>
+                    <Input
+                      value={model.name}
+                      onChange={(event) =>
+                        updateModel(model.id, "name", event.target.value)
+                      }
+                      placeholder={copy.modelNamePlaceholder}
+                      className="min-w-0 flex-1"
+                    />
+                    <div className="flex w-[4.75rem] justify-center">
+                      <Switch
+                        checked={model.enabled}
+                        onCheckedChange={(checked) =>
+                          updateModel(model.id, "enabled", checked)
+                        }
+                        aria-label={`${model.name || model.modelId} ${copy.enabled}`}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => removeModel(model.id)}
+                      disabled={draft.models.length === 1}
+                      className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  {expandedModels.has(model.id) && (
+                    <div className="ml-9 space-y-4 border-l-2 border-muted pl-4">
+                      {isCli && (
+                        <div className="space-y-2">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {copy.cliModelRouting}
+                          </span>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">
+                                {copy.cliBaseModelId}
+                              </Label>
+                              <Input
+                                value={extraText(model.extra, CLI_MODEL_ID_KEY)}
+                                onChange={(event) =>
+                                  updateModelExtra(
+                                    model.id,
+                                    CLI_MODEL_ID_KEY,
+                                    event.target.value,
+                                  )
+                                }
+                                placeholder={model.modelId}
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">
+                                {copy.cliWireModel}
+                              </Label>
+                              <Input
+                                value={extraText(
+                                  model.extra,
+                                  CLI_WIRE_MODEL_KEY,
+                                )}
+                                onChange={(event) =>
+                                  updateModelExtra(
+                                    model.id,
+                                    CLI_WIRE_MODEL_KEY,
+                                    event.target.value,
+                                  )
+                                }
+                                placeholder={model.modelId}
+                              />
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {copy.cliModelRoutingHint}
+                          </p>
+                        </div>
+                      )}
+                      <div className="space-y-2">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          {copy.tokenLimits}
+                        </span>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          <div className="space-y-1">
+                            <Label className="text-xs text-muted-foreground">
+                              {copy.context}
+                            </Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              value={model.contextWindow ?? ""}
+                              placeholder={copy.automatic}
+                              onChange={(event) =>
+                                updateModel(
+                                  model.id,
+                                  "contextWindow",
+                                  parsePositiveInteger(event.target.value),
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs text-muted-foreground">
+                              {copy.maxInput}
+                            </Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              value={model.maxInputTokens ?? ""}
+                              placeholder={copy.automatic}
+                              onChange={(event) =>
+                                updateModel(
+                                  model.id,
+                                  "maxInputTokens",
+                                  event.target.value
+                                    ? parsePositiveInteger(event.target.value)
+                                    : null,
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs text-muted-foreground">
+                              {copy.maxOutput}
+                            </Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              value={model.maxOutputTokens ?? ""}
+                              placeholder={copy.automatic}
+                              onChange={(event) =>
+                                updateModel(
+                                  model.id,
+                                  "maxOutputTokens",
+                                  parsePositiveInteger(event.target.value),
+                                )
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          {copy.capabilities}
+                        </span>
+                        <div className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+                          {(
+                            [
+                              ["toolCalling", copy.toolCalling],
+                              ["vision", copy.vision],
+                              ["thinking", copy.thinking],
+                              ["streaming", copy.streaming],
+                              ["zeroDataRetentionEnabled", copy.zeroData],
+                            ] as const
+                          ).map(([key, label]) => (
+                            <label
+                              key={key}
+                              className="flex items-center justify-between gap-3 text-sm"
+                            >
+                              <span>{label}</span>
+                              <Switch
+                                checked={model[key] ?? false}
+                                onCheckedChange={(checked) =>
+                                  updateModel(model.id, key, checked)
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          {copy.editTools}
+                        </span>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {EDIT_TOOLS.map((tool) => (
+                            <label
+                              key={tool}
+                              className="flex items-center gap-2 text-sm"
+                            >
+                              <Checkbox
+                                checked={model.editTools.includes(tool)}
+                                onCheckedChange={(checked) =>
+                                  toggleEditTool(model, tool, checked === true)
+                                }
+                              />
+                              <span>{tool}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground">
+                            {copy.reasoning}
+                          </Label>
+                          <Input
+                            value={model.reasoningEffortsText}
+                            onChange={(event) =>
+                              updateModel(
+                                model.id,
+                                "reasoningEffortsText",
+                                event.target.value,
+                              )
+                            }
+                            placeholder={copy.reasoningPlaceholder}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground">
+                            {copy.modelOptions}
+                          </Label>
+                          <Textarea
+                            value={model.modelOptionsText}
+                            onChange={(event) =>
+                              updateModel(
+                                model.id,
+                                "modelOptionsText",
+                                event.target.value,
+                              )
+                            }
+                            rows={3}
+                            className="font-mono text-xs"
+                            spellCheck={false}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              {copy.modelDescription}
+            </p>
+          </div>
+        )}
 
         {error ? (
           <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">

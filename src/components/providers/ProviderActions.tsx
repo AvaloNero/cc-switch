@@ -57,6 +57,7 @@ interface ProviderActionsProps {
   // OpenClaw: default model
   isDefaultModel?: boolean;
   isRemovalProtected?: boolean;
+  isDeletionProtected?: boolean;
   isStateChangeProtected?: boolean;
   defaultModelOptions?: OpenClawDefaultModelOption[];
   onSetAsDefault?: (modelId?: string) => void;
@@ -99,6 +100,7 @@ export function ProviderActions({
   // OpenClaw: default model
   isDefaultModel = false,
   isRemovalProtected = false,
+  isDeletionProtected = false,
   isStateChangeProtected = false,
   defaultModelOptions = [],
   onSetAsDefault,
@@ -192,6 +194,7 @@ export function ProviderActions({
           ),
           icon: <Minus className="h-4 w-4" />,
           text: t("provider.removeFromConfig", { defaultValue: "移除" }),
+          title: isRemovalProtected ? t("provider.inUse") : undefined,
         };
       }
       return {
@@ -264,6 +267,7 @@ export function ProviderActions({
   const buttonState = getMainButtonState();
   const canDelete =
     !isReadOnly &&
+    !isDeletionProtected &&
     (appId === "pi"
       ? !isStateChangeProtected
       : isOmo || isAdditiveMode
@@ -272,8 +276,9 @@ export function ProviderActions({
   const readOnlyHint = t("provider.managedByHermesHint", {
     defaultValue: "由 Hermes 管理，请在 Hermes Web UI 中编辑",
   });
-  const deleteHint =
-    appId === "pi" && isStateChangeProtected
+  const deleteHint = isDeletionProtected
+    ? t("provider.inUse")
+    : appId === "pi" && isStateChangeProtected
       ? piStateChangeHint
       : isReadOnly
         ? readOnlyHint

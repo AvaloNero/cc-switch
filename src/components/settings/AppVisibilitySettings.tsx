@@ -35,6 +35,11 @@ const APP_CONFIG: Array<{
     imageSrc: copilotByokIcon,
     nameKey: "apps.copilotByok",
   },
+  {
+    id: "copilotCli",
+    icon: "githubcopilot",
+    nameKey: "apps.copilotCli",
+  },
   { id: "openclaw", icon: "openclaw", nameKey: "apps.openclaw" },
   { id: "hermes", icon: "hermes", nameKey: "apps.hermes" },
   { id: "pi", icon: "pi", nameKey: "apps.pi" },
@@ -128,6 +133,7 @@ function AppButton({
   return (
     <Button
       type="button"
+      aria-label={name}
       onClick={onClick}
       disabled={disabled}
       size="sm"

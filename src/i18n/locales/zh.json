@@ -914,7 +914,9 @@
     "hermes": "Hermes",
     "pi": "Pi",
     "copilotByok": "VS Code Copilot",
-    "copilot-byok": "VS Code Copilot"
+    "copilot-byok": "VS Code Copilot",
+    "copilotCli": "Copilot CLI",
+    "copilot-cli": "Copilot CLI"
   },
   "pi": {
     "empty": {
@@ -1653,25 +1655,51 @@
     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
   },
   "copilotByok": {
-    "description": "管理供 VS Code Copilot 与 Copilot CLI 共用的自定义供应商目录。",
+    "description": "独立管理 VS Code Copilot 的自定义模型供应商。",
     "cli": {
       "title": "Copilot CLI",
-      "description": "选择一个供应商和模型，并写入 Windows 当前用户环境变量。",
+      "description": "选择一个供应商，并将该供应商唯一的默认模型持久应用到新打开的 Copilot CLI 终端会话。",
+      "instructions": "自定义指令",
+      "catalogDescription": "每个供应商只配置一个默认模型；直接启用供应商即可切换 Copilot CLI，不提供独立的模型选择。此目录与 VS Code Copilot 完全独立。",
+      "catalogSaved": "Copilot CLI 供应商已保存",
+      "catalogDeleted": "Copilot CLI 供应商已删除",
+      "confirmDelete": "确定删除这个 Copilot CLI 供应商吗？正在使用的供应商需先切换或恢复原环境。",
       "provider": "供应商",
       "model": "模型",
+      "defaultModel": "默认模型",
       "apply": "应用到 Copilot CLI",
       "disable": "恢复原环境",
       "active": "已生效",
       "inactive": "未配置",
       "needsApply": "需要重新应用",
-      "unsupported": "仅支持 Windows",
-      "restart": "修改对新打开的 CMD 或 PowerShell 生效；必要时请完全重启 Windows Terminal。",
-      "security": "API Key 与保存的原始值会以明文存储在 Windows 用户环境和本机状态文件中；新启动的进程会继承当前值。",
+      "unsupported": "当前平台不支持",
+      "restart": "切换后请打开新终端。Windows 必要时需完全重启 Windows Terminal；macOS/Linux 需启动新 Shell 以加载受管 Profile 钩子。",
+      "security": "供应商凭据保存在 CC Switch 供应商数据库中，并可能进入已配置的备份或云同步。启用后的值还会以明文写入 Windows 用户环境或仅当前用户可读的 Shell 文件；新启动的进程会继承这些值。",
       "conflict": "受管环境变量已被 CC Switch 之外的程序修改，因此不会自动覆盖。",
       "applySuccess": "Copilot CLI 环境已更新，请打开新终端使用。",
-      "disableSuccess": "已恢复 Copilot CLI 原有环境。"
+      "disableSuccess": "已恢复 Copilot CLI 原有环境。",
+      "form": {
+        "defaultModel": "默认模型",
+        "defaultModelHint": "每个 Copilot CLI 供应商只能配置一个模型；切换供应商时会直接使用此模型。",
+        "advanced": "高级模型路由与 Token 设置",
+        "providerType": "Copilot 供应商类型",
+        "providerOpenAi": "OpenAI 兼容",
+        "providerAzure": "Azure OpenAI",
+        "providerAnthropic": "Anthropic",
+        "bearerToken": "Bearer Token（可选，优先于 API Key）",
+        "transport": "Responses 传输方式",
+        "transportHttp": "HTTP",
+        "transportWebSockets": "WebSocket",
+        "azureApiVersion": "Azure API 版本（可选）",
+        "modelRouting": "Copilot CLI 模型路由",
+        "baseModelId": "已知基础模型 ID（可选）",
+        "wireModel": "供应商实际模型名（可选）",
+        "modelRoutingHint": "两项留空时使用上方模型 ID。供应商使用部署名或别名时，可分别填写供 Copilot 判断能力的基础模型和实际发送给供应商的模型名。",
+        "securityTitle": "凭据存储",
+        "security": "凭据保存在独立的 Copilot CLI 供应商目录中。应用后，当前值还会通过 Windows 用户环境变量，或 macOS/Linux 上仅当前用户可读的 CC Switch Shell 文件导出。"
+      }
     },
-    "loading": "正在读取 VS Code 配置…",
+    "loading": "正在读取 Copilot 配置…",
     "targets": "同步目标",
     "targetsDescription": "选择由 CC Switch 管理 chatLanguageModels.json 的 VS Code Profile；配置变化会自动同步。",
     "optInTitle": "当前未管理任何 Profile",
@@ -1799,7 +1827,8 @@
       "opencode": "OpenCode",
       "grokbuild": "Grok Build",
       "pi": "Pi",
-      "copilot-byok": "VS Code Copilot"
+      "copilot-byok": "VS Code Copilot",
+      "copilot-cli": "Copilot CLI"
     },
     "rawInputLabel": "原始",
     "rebuildCodex": {

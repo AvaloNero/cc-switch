@@ -36,6 +36,7 @@ const APP_ICON_NAME: Record<AppId, string> = {
   grokbuild: "grok",
   opencode: "opencode",
   "copilot-byok": "vscode-copilot-byok",
+  "copilot-cli": "githubcopilot",
   openclaw: "openclaw",
   hermes: "hermes",
   pi: "pi",
@@ -49,6 +50,7 @@ const APP_DISPLAY_NAME: Record<AppId, string> = {
   grokbuild: "Grok Build",
   opencode: "OpenCode",
   "copilot-byok": "VS Code Copilot",
+  "copilot-cli": "Copilot CLI",
   openclaw: "OpenClaw",
   hermes: "Hermes",
   pi: "Pi",
@@ -57,12 +59,14 @@ const APP_DISPLAY_NAME: Record<AppId, string> = {
 function AppGlyph({ app, isActive }: { app: AppId; isActive: boolean }) {
   if (app === "copilot-byok") {
     return (
-      <img
-        src={copilotByokIcon}
-        alt=""
-        aria-hidden="true"
-        className="h-5 w-5 shrink-0 rounded object-cover"
-      />
+      <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+        <img
+          src={copilotByokIcon}
+          alt=""
+          aria-hidden="true"
+          className="h-6 w-6 max-w-none shrink-0 rounded object-cover"
+        />
+      </span>
     );
   }
   const badgeConfig = APP_BADGE_ICON[app];
@@ -117,9 +121,9 @@ export function AppSwitcher({
   // Filter apps based on visibility settings (default all visible)
   const itemsToShow = APP_IDS.filter((item) => {
     if (!visibleApps) return true;
-    return item === "copilot-byok"
-      ? visibleApps.copilotByok
-      : visibleApps[item];
+    if (item === "copilot-byok") return visibleApps.copilotByok;
+    if (item === "copilot-cli") return visibleApps.copilotCli;
+    return visibleApps[item];
   });
   const itemCount = itemsToShow.length;
   const [visibleCount, setVisibleCount] = useState(itemCount);

@@ -7,6 +7,7 @@ export type AppId =
   | "grokbuild"
   | "opencode"
   | "copilot-byok"
+  | "copilot-cli"
   | "openclaw"
   | "hermes"
   | "pi";

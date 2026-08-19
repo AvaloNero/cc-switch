@@ -26,6 +26,14 @@ impl FileUpdate {
             contents: Some(contents),
         }
     }
+
+    #[cfg(any(unix, test))]
+    pub(crate) fn delete(path: PathBuf) -> Self {
+        Self {
+            path,
+            contents: None,
+        }
+    }
 }
 
 fn metadata_if_exists(path: &Path) -> Result<Option<fs::Metadata>, AppError> {

@@ -24,6 +24,11 @@ pub fn copilot_byok_get_state(state: State<'_, AppState>) -> Result<CopilotByokS
     copilot_byok::get_state(state.db.as_ref()).map_err(Into::into)
 }
 
+#[tauri::command]
+pub fn copilot_cli_get_state(state: State<'_, AppState>) -> Result<CopilotByokState, String> {
+    copilot_byok::get_cli_state(state.db.as_ref()).map_err(Into::into)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn copilot_byok_set_cli_selection(
     state: State<'_, AppState>,
@@ -33,8 +38,21 @@ pub fn copilot_byok_set_cli_selection(
     copilot_byok::set_cli_selection(state.db.as_ref(), &group_id, &model_id).map_err(Into::into)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub fn copilot_cli_set_selection(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::set_cli_provider(state.db.as_ref(), &group_id).map_err(Into::into)
+}
+
 #[tauri::command]
 pub fn copilot_byok_disable_cli(state: State<'_, AppState>) -> Result<CopilotByokState, String> {
+    copilot_byok::disable_cli(state.db.as_ref()).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn copilot_cli_disable(state: State<'_, AppState>) -> Result<CopilotByokState, String> {
     copilot_byok::disable_cli(state.db.as_ref()).map_err(Into::into)
 }
 
@@ -95,6 +113,30 @@ pub fn copilot_byok_reorder_groups(
     copilot_byok::reorder_groups(state.db.as_ref(), group_ids).map_err(Into::into)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub fn copilot_cli_upsert_group(
+    state: State<'_, AppState>,
+    group: CopilotByokGroup,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::upsert_cli_group(state.db.as_ref(), group).map_err(Into::into)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn copilot_cli_delete_group(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::delete_cli_group(state.db.as_ref(), &group_id).map_err(Into::into)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn copilot_cli_reorder_groups(
+    state: State<'_, AppState>,
+    group_ids: Vec<String>,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::reorder_cli_groups(state.db.as_ref(), group_ids).map_err(Into::into)
+}
+
 #[tauri::command]
 pub fn copilot_byok_sync(state: State<'_, AppState>) -> Result<CopilotByokSyncResult, String> {
     copilot_byok::sync(state.db.as_ref()).map_err(Into::into)
@@ -134,5 +176,25 @@ pub async fn copilot_byok_check_connection(
     let _ = state
         .db
         .save_stream_check_log(&group.id, &group.name, "copilot-byok", &result);
+    Ok(result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn copilot_cli_check_connection(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> Result<StreamCheckResult, String> {
+    let group = copilot_byok::cli_usage_catalog(state.db.as_ref())
+        .map_err(String::from)?
+        .into_iter()
+        .find(|group| group.id == group_id)
+        .ok_or_else(|| format!("Copilot CLI provider {group_id} does not exist"))?;
+    let config = state.db.get_stream_check_config().map_err(String::from)?;
+    let result = StreamCheckService::check_url_with_retry(&group.url, &config)
+        .await
+        .map_err(String::from)?;
+    let _ = state
+        .db
+        .save_stream_check_log(&group.id, &group.name, "copilot-cli", &result);
     Ok(result)
 }

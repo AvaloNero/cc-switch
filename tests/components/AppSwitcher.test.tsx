@@ -54,6 +54,23 @@ describe("AppSwitcher", () => {
     expect(onSwitch).not.toHaveBeenCalled();
   });
 
+  it("treats Copilot CLI as a separate primary item with the Copilot glyph", () => {
+    const onSwitch = vi.fn();
+    render(<AppSwitcher activeApp="copilot-cli" onSwitch={onSwitch} />);
+
+    const vscode = screen.getByRole("button", { name: "VS Code Copilot" });
+    const cli = screen.getByRole("button", { name: "Copilot CLI" });
+    expect(cli).toHaveClass("bg-background");
+    expect(cli.querySelector("svg")).not.toBeNull();
+    expect(cli.querySelector("img")).toBeNull();
+    expect(
+      vscode.compareDocumentPosition(cli) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(vscode);
+    expect(onSwitch).toHaveBeenCalledWith("copilot-byok");
+  });
+
   it("hides VS Code Copilot when it is disabled in visible apps", () => {
     render(
       <AppSwitcher
@@ -70,6 +87,7 @@ describe("AppSwitcher", () => {
           hermes: true,
           pi: true,
           copilotByok: false,
+          copilotCli: true,
         }}
       />,
     );
@@ -78,5 +96,34 @@ describe("AppSwitcher", () => {
       screen.queryByRole("button", { name: "VS Code Copilot" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Claude Code" })).toBeVisible();
+  });
+
+  it("hides Copilot CLI independently from VS Code Copilot", () => {
+    render(
+      <AppSwitcher
+        activeApp="claude"
+        onSwitch={vi.fn()}
+        visibleApps={{
+          claude: true,
+          "claude-desktop": true,
+          codex: true,
+          gemini: true,
+          grokbuild: true,
+          opencode: true,
+          openclaw: true,
+          hermes: true,
+          pi: true,
+          copilotByok: true,
+          copilotCli: false,
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "VS Code Copilot" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Copilot CLI" }),
+    ).not.toBeInTheDocument();
   });
 });

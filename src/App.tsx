@@ -73,6 +73,10 @@ import {
   CopilotByokSettings,
   type CopilotByokSettingsHandle,
 } from "@/components/settings/CopilotByokSettings";
+import {
+  CopilotCliSettings,
+  type CopilotCliSettingsHandle,
+} from "@/components/settings/CopilotCliSettings";
 import { UpdateBadge } from "@/components/UpdateBadge";
 import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
@@ -232,8 +236,11 @@ function App() {
     [settingsData?.visibleApps],
   );
 
-  const isAppVisible = (app: AppId): boolean =>
-    app === "copilot-byok" ? visibleApps.copilotByok : visibleApps[app];
+  const isAppVisible = (app: AppId): boolean => {
+    if (app === "copilot-byok") return visibleApps.copilotByok;
+    if (app === "copilot-cli") return visibleApps.copilotCli;
+    return visibleApps[app];
+  };
 
   const getFirstVisibleApp = (): AppId => {
     return APP_IDS.find(isAppVisible) ?? "claude";
@@ -264,7 +271,8 @@ function App() {
       sharedFeatureApp !== "gemini" &&
       sharedFeatureApp !== "hermes" &&
       sharedFeatureApp !== "pi" &&
-      sharedFeatureApp !== "copilot-byok"
+      sharedFeatureApp !== "copilot-byok" &&
+      sharedFeatureApp !== "copilot-cli"
     ) {
       setCurrentView("providers");
     }
@@ -291,6 +299,7 @@ function App() {
   const skillsPageRef = useRef<any>(null);
   const unifiedSkillsPanelRef = useRef<any>(null);
   const copilotByokRef = useRef<CopilotByokSettingsHandle>(null);
+  const copilotCliRef = useRef<CopilotCliSettingsHandle>(null);
   // 订阅未管理 Skill 的共享缓存（实际扫描由 UnifiedSkillsPanel 进入页面时触发）。
   // 这里 enabled 默认 false，仅用于「导入」按钮的绿点提示，不主动发起扫描。
   const { data: unmanagedSkills } = useScanUnmanagedSkills();
@@ -319,6 +328,7 @@ function App() {
 
   const { data, isLoading, refetch } = useProvidersQuery(activeApp, {
     isProxyRunning: currentAppUsesProxy && isProxyRunning,
+    enabled: activeApp !== "copilot-byok" && activeApp !== "copilot-cli",
   });
   const { data: piCurrentState } = usePiCurrentState(activeApp === "pi");
   const providers = useMemo(() => data?.providers ?? {}, [data]);
@@ -343,7 +353,8 @@ function App() {
     sharedFeatureApp === "gemini" ||
     sharedFeatureApp === "hermes" ||
     sharedFeatureApp === "pi" ||
-    sharedFeatureApp === "copilot-byok";
+    sharedFeatureApp === "copilot-byok" ||
+    sharedFeatureApp === "copilot-cli";
   const hasMcpSupport = sharedFeatureApp !== "pi";
 
   const {
@@ -1143,6 +1154,18 @@ function App() {
               </div>
             );
           }
+          if (activeApp === "copilot-cli") {
+            return (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden px-1 pb-12 pt-4">
+                  <CopilotCliSettings
+                    ref={copilotCliRef}
+                    onOpenWebsite={handleOpenWebsite}
+                  />
+                </div>
+              </div>
+            );
+          }
           return (
             <div className="px-6 flex flex-col flex-1 min-h-0 overflow-hidden">
               <div className="flex-1 overflow-y-auto overflow-x-hidden pb-12 px-1">
@@ -1355,9 +1378,11 @@ function App() {
                 <h1 className="text-lg font-semibold">
                   {currentView === "settings" && t("settings.title")}
                   {currentView === "prompts" &&
-                    t("prompts.title", {
-                      appName: t(`apps.${sharedFeatureApp}`),
-                    })}
+                    (sharedFeatureApp === "copilot-cli"
+                      ? t("copilotByok.cli.instructions")
+                      : t("prompts.title", {
+                          appName: t(`apps.${sharedFeatureApp}`),
+                        }))}
                   {currentView === "skills" && t("skills.title")}
                   {currentView === "skillsDiscovery" && t("skills.title")}
                   {currentView === "mcp" && t("mcp.unifiedPanel.title")}
@@ -1403,13 +1428,19 @@ function App() {
                     setCurrentView("settings");
                   }}
                 />
-                {isCurrentAppTakeoverActive && (
+                {(isCurrentAppTakeoverActive ||
+                  activeApp === "copilot-byok" ||
+                  activeApp === "copilot-cli") && (
                   <Button
                     variant="ghost"
                     size="icon"
                     onClick={() => {
                       setUsageDefaultFilter({
-                        appType: "all",
+                        appType:
+                          activeApp === "copilot-byok" ||
+                          activeApp === "copilot-cli"
+                            ? activeApp
+                            : "all",
                         revision: Date.now(),
                       });
                       setSettingsDefaultTab("usage");
@@ -1450,6 +1481,7 @@ function App() {
               )}
             {currentView === "providers" &&
               activeApp !== "copilot-byok" &&
+              activeApp !== "copilot-cli" &&
               (settingsData?.showProfileSwitcher ?? true) && (
                 <div
                   className="flex shrink-0 items-center"
@@ -1774,7 +1806,11 @@ function App() {
                                   setCurrentView("prompts");
                                 }}
                                 className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
-                                title={t("prompts.manage")}
+                                title={
+                                  primaryToolbarApp === "copilot-cli"
+                                    ? t("copilotByok.cli.instructions")
+                                    : t("prompts.manage")
+                                }
                               >
                                 <Book className="w-4 h-4" />
                               </Button>
@@ -1816,6 +1852,8 @@ function App() {
                       onClick={() => {
                         if (activeApp === "copilot-byok") {
                           copilotByokRef.current?.openAdd();
+                        } else if (activeApp === "copilot-cli") {
+                          copilotCliRef.current?.openAdd();
                         } else {
                           setIsAddOpen(true);
                         }

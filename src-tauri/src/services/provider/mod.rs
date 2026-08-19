@@ -5538,7 +5538,7 @@ impl ProviderService {
             AppType::Gemini => Self::extract_gemini_common_config(&provider.settings_config),
             AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(&provider.settings_config),
-            AppType::CopilotByok => Ok(String::new()),
+            AppType::CopilotByok | AppType::CopilotCli => Ok(String::new()),
             AppType::OpenClaw => Self::extract_openclaw_common_config(&provider.settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
             AppType::Pi => Ok(String::new()),
@@ -5557,7 +5557,7 @@ impl ProviderService {
             AppType::Gemini => Self::extract_gemini_common_config(settings_config),
             AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(settings_config),
-            AppType::CopilotByok => Ok(String::new()),
+            AppType::CopilotByok | AppType::CopilotCli => Ok(String::new()),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
             AppType::Pi => Ok(String::new()),
@@ -6305,7 +6305,7 @@ impl ProviderService {
                     ));
                 }
             }
-            AppType::CopilotByok => {
+            AppType::CopilotByok | AppType::CopilotCli => {
                 let mut group: crate::copilot_byok::CopilotByokGroup =
                     serde_json::from_value(provider.settings_config.clone()).map_err(|error| {
                         AppError::InvalidInput(format!(
@@ -6543,7 +6543,7 @@ impl ProviderService {
 
                 Ok((api_key, base_url))
             }
-            AppType::CopilotByok => {
+            AppType::CopilotByok | AppType::CopilotCli => {
                 let api_key = provider
                     .settings_config
                     .get("apiKey")

@@ -198,7 +198,8 @@ export type AppType =
   | "grokbuild"
   | "opencode"
   | "pi"
-  | "copilot-byok";
+  | "copilot-byok"
+  | "copilot-cli";
 
 export type AppTypeFilter = "all" | AppType;
 
@@ -210,6 +211,7 @@ export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
   "opencode",
   "pi",
   "copilot-byok",
+  "copilot-cli",
 ];
 
 /**

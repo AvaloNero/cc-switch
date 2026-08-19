@@ -222,6 +222,7 @@ fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
          WHEN '_opencode_session' THEN 'OpenCode (Session)' \
          WHEN '_grok_session' THEN 'Grok Build (Session)' \
          WHEN '_pi_session' THEN 'Pi (Session)' \
+         WHEN '_copilot_cli_session' THEN 'Copilot CLI' \
          WHEN 'vscode-copilot' THEN 'VSCode Copilot' \
          ELSE {log_alias}.provider_id END)"
     )
