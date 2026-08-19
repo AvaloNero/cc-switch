@@ -1428,19 +1428,13 @@ function App() {
                     setCurrentView("settings");
                   }}
                 />
-                {(isCurrentAppTakeoverActive ||
-                  activeApp === "copilot-byok" ||
-                  activeApp === "copilot-cli") && (
+                {isCurrentAppTakeoverActive && (
                   <Button
                     variant="ghost"
                     size="icon"
                     onClick={() => {
                       setUsageDefaultFilter({
-                        appType:
-                          activeApp === "copilot-byok" ||
-                          activeApp === "copilot-cli"
-                            ? activeApp
-                            : "all",
+                        appType: "all",
                         revision: Date.now(),
                       });
                       setSettingsDefaultTab("usage");

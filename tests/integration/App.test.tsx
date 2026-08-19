@@ -281,7 +281,7 @@ describe("App integration with MSW", () => {
       "copilot-byok",
     );
     expect(screen.getByTestId("app-switcher")).toBeInTheDocument();
-    expect(document.querySelector('button[title="使用统计"]')).not.toBeNull();
+    expect(document.querySelector('button[title="使用统计"]')).toBeNull();
     const syncTargetsButton = await screen.findByTitle("copilotByok.targets");
     for (const title of [
       "skills.manage",
@@ -337,7 +337,7 @@ describe("App integration with MSW", () => {
       await screen.findByTestId("copilot-cli-settings"),
     ).toBeInTheDocument();
     expect(screen.getByTestId("app-switcher")).toHaveTextContent("copilot-cli");
-    expect(document.querySelector('button[title="使用统计"]')).not.toBeNull();
+    expect(document.querySelector('button[title="使用统计"]')).toBeNull();
     await waitFor(() =>
       expect(
         document.querySelector(

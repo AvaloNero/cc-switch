@@ -183,9 +183,10 @@ export const copilotCliApi = {
     return invoke<CopilotByokState>("copilot_cli_get_state");
   },
 
-  setSelection(groupId: string): Promise<CopilotByokState> {
+  setSelection(groupId: string, groupName: string): Promise<CopilotByokState> {
     return invoke<CopilotByokState>("copilot_cli_set_selection", {
       groupId,
+      groupName,
     });
   },
 

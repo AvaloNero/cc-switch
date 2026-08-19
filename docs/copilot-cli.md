@@ -41,7 +41,7 @@ Values are stored in private files:
 
 CC Switch adds a bounded, reversible source block to `.profile`, `.bashrc`, and `.zshrc`, as well as existing `.bash_profile`, `.bash_login`, or `.zprofile` files. Fish uses `~/.config/fish/conf.d/cc-switch-copilot.fish`. The managed environment files are written with user-only permissions on Unix.
 
-On every platform, the first apply snapshots the original managed variables. **Restore Original Environment** restores that snapshot. Before switching or restoring, CC Switch compares live values and managed shell artifacts with its last successful write; external edits cause a conflict instead of being overwritten. Environment, state, and shell-hook updates are rollback-protected.
+On every platform, the first apply snapshots the original managed variables. Selecting the **GitHub Copilot Official** provider row restores that snapshot and returns the CLI to its built-in authentication and model routing. Before switching or restoring, CC Switch compares live values and managed shell artifacts with its last successful write; external edits cause a conflict instead of being overwritten. Environment, state, and shell-hook updates are rollback-protected.
 
 VS Code SecretStorage references such as `${input:provider-key}` cannot be resolved by Copilot CLI and are rejected. Provider credentials are stored in the CC Switch database and may be included in configured backups or cloud sync. Applied credentials are also present in the user environment or private shell files and are inherited by newly started processes.
 

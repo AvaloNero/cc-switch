@@ -1155,6 +1155,45 @@ mod tests {
     }
 
     #[test]
+    fn applies_a_single_model_chat_completions_provider() {
+        let mut provider = group();
+        provider.name = "Minimax".to_string();
+        provider.url = "https://api.minimaxi.com/v1".to_string();
+        provider.api_type = "chat-completions".to_string();
+        provider.request_headers.clear();
+        provider.models[0].model_id = "MiniMax-M3".to_string();
+        provider.models[0].name = "MiniMax-M3".to_string();
+        let groups = vec![provider];
+        let environment = MemoryEnvironment::default();
+        let mut store = CopilotByokStore::default();
+
+        let state = apply_with_backend(
+            &mut store,
+            &groups,
+            "provider",
+            "model-record",
+            &environment,
+            |_| Ok(()),
+        )
+        .expect("single-model Chat Completions provider should activate");
+
+        assert!(state.enabled);
+        let values = environment.values.borrow();
+        assert_eq!(
+            values.get("COPILOT_PROVIDER_BASE_URL").map(String::as_str),
+            Some("https://api.minimaxi.com/v1")
+        );
+        assert_eq!(
+            values.get("COPILOT_PROVIDER_WIRE_API").map(String::as_str),
+            Some("completions")
+        );
+        assert_eq!(
+            values.get("COPILOT_MODEL").map(String::as_str),
+            Some("MiniMax-M3")
+        );
+    }
+
+    #[test]
     fn maps_official_azure_bearer_transport_and_model_overrides() {
         let mut provider = group();
         provider.url =

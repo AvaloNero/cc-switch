@@ -1678,7 +1678,7 @@
       "security": "供應商憑證儲存在 CC Switch 供應商資料庫中，並可能納入已設定的備份或雲端同步。啟用後的值也會以明文寫入 Windows 使用者環境或僅目前使用者可讀的 Shell 檔案；新啟動的程序會繼承這些值。",
       "conflict": "受管理的環境變數已由 CC Switch 以外的程式修改，因此不會自動覆寫。",
       "applySuccess": "Copilot CLI 環境已更新，請開啟新終端機使用。",
-      "disableSuccess": "已還原 Copilot CLI 原始環境。",
+      "disableSuccess": "已切換回 GitHub Copilot 官方供應商。",
       "form": {
         "defaultModel": "預設模型",
         "defaultModelHint": "每個 Copilot CLI 供應商只能設定一個模型；切換供應商時會直接使用此模型。",

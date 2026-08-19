@@ -1677,7 +1677,7 @@
       "security": "Provider credentials are stored in the CC Switch provider database and may be included in configured backups or cloud sync. Active values are also written as plaintext to the Windows user environment or private shell files; newly started processes inherit them.",
       "conflict": "Managed environment variables were changed outside CC Switch. They will not be overwritten automatically.",
       "applySuccess": "Copilot CLI environment updated. Open a new terminal to use it.",
-      "disableSuccess": "The original Copilot CLI environment was restored.",
+      "disableSuccess": "Switched back to the official GitHub Copilot provider.",
       "form": {
         "defaultModel": "Default Model",
         "defaultModelHint": "Each Copilot CLI provider can define exactly one model. Switching providers uses this model directly.",

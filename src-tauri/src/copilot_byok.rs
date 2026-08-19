@@ -528,28 +528,60 @@ pub fn set_cli_selection(
     build_cli_state(db, store)
 }
 
-pub fn set_cli_provider(db: &Database, group_id: &str) -> Result<CopilotByokState, AppError> {
+fn resolve_cli_provider<'a>(
+    groups: &'a [CopilotByokGroup],
+    group_id: &str,
+    group_name: Option<&str>,
+) -> Result<&'a CopilotByokGroup, AppError> {
+    if let Some(group) = groups
+        .iter()
+        .find(|group| group.id == group_id && group.enabled)
+    {
+        return Ok(group);
+    }
+
+    let requested_name = group_name.map(str::trim).filter(|name| !name.is_empty());
+    if let Some(group) = requested_name.and_then(|name| {
+        groups
+            .iter()
+            .find(|group| group.enabled && group.name.eq_ignore_ascii_case(name))
+    }) {
+        log::warn!(
+            "Copilot CLI provider id changed from '{}' to '{}'; resolved by unique provider name '{}'",
+            group_id,
+            group.id,
+            group.name
+        );
+        return Ok(group);
+    }
+
+    Err(AppError::InvalidInput(format!(
+        "Unknown Copilot CLI provider: {group_id}"
+    )))
+}
+
+pub fn set_cli_provider(
+    db: &Database,
+    group_id: &str,
+    group_name: Option<&str>,
+) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
     let mut store = load_runtime_store(db)?;
     let groups = load_cli_catalog(db)?;
-    let group = groups
-        .iter()
-        .find(|group| group.id == group_id && group.enabled)
-        .ok_or_else(|| {
-            AppError::InvalidInput(format!("Unknown Copilot CLI provider: {group_id}"))
-        })?;
+    let group = resolve_cli_provider(&groups, group_id, group_name)?;
+    let resolved_group_id = group.id.clone();
     let model = group.models.first().ok_or_else(|| {
         AppError::Config(format!(
-            "Copilot CLI provider {group_id} has no default model"
+            "Copilot CLI provider {resolved_group_id} has no default model"
         ))
     })?;
     if group.models.len() != 1 || !model.enabled {
         return Err(AppError::Config(format!(
-            "Copilot CLI provider {group_id} must have exactly one enabled default model"
+            "Copilot CLI provider {resolved_group_id} must have exactly one enabled default model"
         )));
     }
     let model_id = model.id.clone();
-    cli::apply(&mut store, &groups, group_id, &model_id)?;
+    cli::apply(&mut store, &groups, &resolved_group_id, &model_id)?;
     build_cli_state(db, store)
 }
 
@@ -955,6 +987,16 @@ mod tests {
             }],
             extra: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn cli_provider_selection_recovers_from_a_stale_catalog_id_by_unique_name() {
+        let groups = vec![group("current-id", "Minimax")];
+
+        let resolved = resolve_cli_provider(&groups, "stale-id", Some("minimax"))
+            .expect("provider name should recover a stale catalog id");
+
+        assert_eq!(resolved.id, "current-id");
     }
 
     fn detected_target(

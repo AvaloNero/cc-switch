@@ -1677,7 +1677,7 @@
       "security": "供应商凭据保存在 CC Switch 供应商数据库中，并可能进入已配置的备份或云同步。启用后的值还会以明文写入 Windows 用户环境或仅当前用户可读的 Shell 文件；新启动的进程会继承这些值。",
       "conflict": "受管环境变量已被 CC Switch 之外的程序修改，因此不会自动覆盖。",
       "applySuccess": "Copilot CLI 环境已更新，请打开新终端使用。",
-      "disableSuccess": "已恢复 Copilot CLI 原有环境。",
+      "disableSuccess": "已切换回 GitHub Copilot 官方供应商。",
       "form": {
         "defaultModel": "默认模型",
         "defaultModelHint": "每个 Copilot CLI 供应商只能配置一个模型；切换供应商时会直接使用此模型。",

@@ -27,9 +27,11 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   AlertCircle,
+  Check,
   Download,
   GripVertical,
   Loader2,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -145,7 +147,6 @@ function SortableCopilotGroupCard({
     group.notes?.trim() || group.websiteUrl?.trim() || group.url;
   const link =
     group.websiteUrl?.trim() || (!group.notes?.trim() ? group.url : null);
-  const defaultModel = group.models[0];
   const isCli = appId === "copilot-cli";
 
   return (
@@ -204,15 +205,6 @@ function SortableCopilotGroupCard({
                 </Badge>
               )}
             </div>
-            {isCli && defaultModel ? (
-              <p
-                className="truncate text-sm font-medium text-foreground/80"
-                title={`${defaultModel.name} · ${defaultModel.modelId}`}
-              >
-                {t("copilotByok.cli.defaultModel")}: {defaultModel.name} ·{" "}
-                {defaultModel.modelId}
-              </p>
-            ) : null}
             {link ? (
               <button
                 type="button"
@@ -239,14 +231,7 @@ function SortableCopilotGroupCard({
           </div>
         </div>
 
-        <div
-          className={cn(
-            "ml-auto flex flex-shrink-0 items-center gap-1.5 transition-opacity duration-200",
-            isCli
-              ? "pointer-events-auto opacity-100"
-              : "pointer-events-none opacity-0 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100",
-          )}
-        >
+        <div className="pointer-events-none ml-auto flex flex-shrink-0 items-center gap-1.5 opacity-0 transition-opacity duration-200 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
           <ProviderActions
             appId={appId}
             isCurrent={active}
@@ -261,6 +246,109 @@ function SortableCopilotGroupCard({
             isRemovalProtected={selected}
             isDeletionProtected={selected}
           />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface CopilotCliOfficialCardProps {
+  active: boolean;
+  disabled: boolean;
+  restoring: boolean;
+  onSelect: () => void;
+  onOpenWebsite?: (url: string) => void;
+}
+
+const COPILOT_OFFICIAL_WEBSITE = "https://github.com/features/copilot";
+
+function CopilotCliOfficialCard({
+  active,
+  disabled,
+  restoring,
+  onSelect,
+  onOpenWebsite,
+}: CopilotCliOfficialCardProps) {
+  const { t } = useTranslation();
+  const providerName = "GitHub Copilot Official";
+
+  return (
+    <div
+      role="group"
+      aria-label={providerName}
+      className={cn(
+        "group relative overflow-hidden rounded-xl border border-border bg-card p-4 text-card-foreground transition-all duration-300 hover:border-border-active hover:shadow-sm",
+        active && "border-blue-500/60 shadow-sm shadow-blue-500/10",
+      )}
+    >
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-0 bg-gradient-to-r from-blue-500/10 to-transparent transition-opacity duration-500",
+          active ? "opacity-100" : "opacity-0",
+        )}
+      />
+      <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div aria-hidden="true" className="w-5 flex-shrink-0" />
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted transition-transform duration-300 group-hover:scale-105">
+            <ProviderIcon
+              icon="githubcopilot"
+              name={providerName}
+              size={24}
+              showFallback={false}
+            />
+          </div>
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="flex min-h-7 flex-wrap items-center gap-2">
+              <h3 className="text-base font-semibold leading-none">
+                {providerName}
+              </h3>
+              {active ? (
+                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                  {t("provider.inUse")}
+                </Badge>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenWebsite?.(COPILOT_OFFICIAL_WEBSITE)}
+              disabled={!onOpenWebsite}
+              className={cn(
+                "inline-flex max-w-full items-center overflow-hidden text-left text-sm text-blue-500 dark:text-blue-400",
+                onOpenWebsite
+                  ? "cursor-pointer transition-colors hover:underline"
+                  : "cursor-default",
+              )}
+              title={COPILOT_OFFICIAL_WEBSITE}
+            >
+              <span className="min-w-0 truncate">
+                {COPILOT_OFFICIAL_WEBSITE}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div className="pointer-events-none ml-auto flex flex-shrink-0 items-center gap-1.5 opacity-0 transition-opacity duration-200 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
+          <Button
+            size="sm"
+            variant={active ? "secondary" : "default"}
+            onClick={onSelect}
+            disabled={active || disabled}
+            className={cn(
+              "w-[4.5rem] px-2.5",
+              active &&
+                "bg-gray-200 text-muted-foreground hover:bg-gray-200 hover:text-muted-foreground dark:bg-gray-700 dark:hover:bg-gray-700",
+            )}
+          >
+            {restoring ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : active ? (
+              <Check className="h-4 w-4" />
+            ) : (
+              <Play className="h-4 w-4" />
+            )}
+            {active ? t("provider.inUse") : t("provider.enable")}
+          </Button>
         </div>
       </div>
     </div>
@@ -427,6 +515,15 @@ export const CopilotByokSettings = forwardRef<
     );
   }, [searchTerm, state?.groups]);
 
+  const showOfficialCliProvider = useMemo(() => {
+    if (!isCliCatalog) return false;
+    const keyword = searchTerm.trim().toLowerCase();
+    if (!keyword) return true;
+    return ["GitHub Copilot Official", COPILOT_OFFICIAL_WEBSITE].some((value) =>
+      value.toLowerCase().includes(keyword),
+    );
+  }, [isCliCatalog, searchTerm]);
+
   const importTarget = useMemo(() => {
     const targets = state?.targets.filter((target) => !target.readError) ?? [];
     return (
@@ -532,10 +629,14 @@ export const CopilotByokSettings = forwardRef<
     if (!isCliCatalog || busy) return;
     setBusy(`cli-apply:${group.id}`);
     try {
-      const next = await copilotCliApi.setSelection(group.id);
+      const next = await copilotCliApi.setSelection(group.id, group.name);
       commitState(next);
       toast.success(t("copilotByok.cli.applySuccess"));
     } catch (error) {
+      console.error(
+        "[CopilotByokSettings] Failed to activate Copilot CLI provider",
+        { groupId: group.id, groupName: group.name, error },
+      );
       toast.error(String(error));
     } finally {
       setBusy(null);
@@ -550,6 +651,10 @@ export const CopilotByokSettings = forwardRef<
       commitState(next);
       toast.success(t("copilotByok.cli.disableSuccess"));
     } catch (error) {
+      console.error(
+        "[CopilotByokSettings] Failed to restore GitHub Copilot official environment",
+        error,
+      );
       toast.error(String(error));
     } finally {
       setBusy(null);
@@ -822,96 +927,7 @@ export const CopilotByokSettings = forwardRef<
   if (catalogOnly) {
     return (
       <>
-        {isCliCatalog ? (
-          <div className="space-y-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <h3 className="text-base font-semibold">
-                  {t("provider.tabProvider")}
-                </h3>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  {t("copilotByok.cli.catalogDescription")}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                {state.cli.enabled ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    disabled={Boolean(busy)}
-                    onClick={() => void disableCli()}
-                  >
-                    {busy === "cli-disable" ? (
-                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <RotateCcw className="mr-2 h-3.5 w-3.5" />
-                    )}
-                    {t("copilotByok.cli.disable")}
-                  </Button>
-                ) : null}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  disabled={Boolean(busy)}
-                  onClick={() => void load(true)}
-                  aria-label={copy.refresh}
-                >
-                  <RefreshCw
-                    className={
-                      busy === "load" ? "h-4 w-4 animate-spin" : "h-4 w-4"
-                    }
-                  />
-                </Button>
-              </div>
-            </div>
-
-            {state.cli.enabled ? (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs">
-                <ProviderIcon
-                  icon="githubcopilot"
-                  name="Copilot CLI"
-                  size={15}
-                  showFallback={false}
-                />
-                <Badge
-                  variant={
-                    state.cli.environmentMatches ? "secondary" : "outline"
-                  }
-                  className="h-5 px-1.5 text-[10px]"
-                >
-                  {state.cli.environmentMatches
-                    ? t("copilotByok.cli.active")
-                    : t("copilotByok.cli.needsApply")}
-                </Badge>
-                <span className="font-medium">
-                  {state.cli.selectedProviderName}
-                </span>
-                {state.cli.selectedModelName ? (
-                  <span className="text-muted-foreground">
-                    · {state.cli.selectedModelName}
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-
-            {state.cli.environmentConflicts.length > 0 ? (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>{t("copilotByok.cli.conflict")}</AlertTitle>
-                <AlertDescription className="break-all font-mono text-xs">
-                  {state.cli.environmentConflicts.join(", ")}
-                </AlertDescription>
-              </Alert>
-            ) : null}
-
-            <div className="space-y-1 text-[11px] leading-4 text-muted-foreground">
-              <p>{t("copilotByok.cli.restart")}</p>
-              <p>{t("copilotByok.cli.security")}</p>
-            </div>
-          </div>
-        ) : null}
-        <div className="mt-4 space-y-3">
+        <div className={cn("space-y-3", !isCliCatalog && "mt-4")}>
           <AnimatePresence>
             {isSearchOpen && (
               <motion.div
@@ -962,7 +978,17 @@ export const CopilotByokSettings = forwardRef<
             )}
           </AnimatePresence>
 
-          {state.groups.length === 0 ? (
+          {showOfficialCliProvider ? (
+            <CopilotCliOfficialCard
+              active={!state.cli.enabled}
+              disabled={Boolean(busy)}
+              restoring={busy === "cli-disable"}
+              onSelect={() => void disableCli()}
+              onOpenWebsite={onOpenWebsite}
+            />
+          ) : null}
+
+          {!isCliCatalog && state.groups.length === 0 ? (
             <ProviderEmptyState
               appId={catalogApp}
               onCreate={openAdd}
@@ -972,11 +998,11 @@ export const CopilotByokSettings = forwardRef<
                   : undefined
               }
             />
-          ) : filteredGroups.length === 0 ? (
+          ) : filteredGroups.length === 0 && !showOfficialCliProvider ? (
             <div className="rounded-lg border border-dashed border-border px-6 py-8 text-center text-sm text-muted-foreground">
               {t("provider.noSearchResults")}
             </div>
-          ) : (
+          ) : filteredGroups.length > 0 ? (
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
@@ -1028,7 +1054,7 @@ export const CopilotByokSettings = forwardRef<
                 </div>
               </SortableContext>
             </DndContext>
-          )}
+          ) : null}
         </div>
         {groupEditor}
         {confirmationDialogs}

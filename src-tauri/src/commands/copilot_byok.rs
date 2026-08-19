@@ -42,8 +42,19 @@ pub fn copilot_byok_set_cli_selection(
 pub fn copilot_cli_set_selection(
     state: State<'_, AppState>,
     group_id: String,
+    group_name: Option<String>,
 ) -> Result<CopilotByokState, String> {
-    copilot_byok::set_cli_provider(state.db.as_ref(), &group_id).map_err(Into::into)
+    copilot_byok::set_cli_provider(state.db.as_ref(), &group_id, group_name.as_deref()).map_err(
+        |error| {
+            log::error!(
+                "Failed to activate Copilot CLI provider id='{}' name='{}': {}",
+                group_id,
+                group_name.as_deref().unwrap_or(""),
+                error
+            );
+            error.into()
+        },
+    )
 }
 
 #[tauri::command]

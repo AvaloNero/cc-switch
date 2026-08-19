@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CopilotCliSettings } from "@/components/settings/CopilotCliSettings";
 import type { CopilotByokGroup, CopilotByokState } from "@/lib/api";
@@ -144,24 +150,28 @@ describe("CopilotCliSettings", () => {
     mocks.reorderGroups.mockResolvedValue(cliState(false));
   });
 
-  it("switches a provider directly to its single default model", async () => {
+  it("shows a compact provider list and switches the provider directly", async () => {
     render(<CopilotCliSettings />);
 
     expect(await screen.findByText("CLI Provider")).toBeInTheDocument();
-    expect(screen.getByText(/默认模型:/)).toHaveTextContent(
-      "GPT Custom · gpt-custom",
-    );
+    expect(screen.getByText("GitHub Copilot Official")).toBeInTheDocument();
+    expect(screen.queryByText(/默认模型:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("供应商")).not.toBeInTheDocument();
+    expect(screen.queryByText("CLI 独立供应商目录")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "启用" }));
 
     await waitFor(() =>
-      expect(mocks.setSelection).toHaveBeenCalledWith("cli-provider"),
+      expect(mocks.setSelection).toHaveBeenCalledWith(
+        "cli-provider",
+        "CLI Provider",
+      ),
     );
     expect(mocks.cliGetState).toHaveBeenCalled();
     expect(mocks.vscodeGetState).not.toHaveBeenCalled();
   });
 
-  it("marks the active provider and protects it until the environment is restored", async () => {
+  it("marks the active provider and switches back through the official provider row", async () => {
     mocks.cliGetState.mockResolvedValue(cliState(true));
     render(<CopilotCliSettings />);
 
@@ -170,7 +180,12 @@ describe("CopilotCliSettings", () => {
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "删除" })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "恢复原环境" }));
+    const officialProvider = screen.getByRole("group", {
+      name: "GitHub Copilot Official",
+    });
+    fireEvent.click(
+      within(officialProvider).getByRole("button", { name: "启用" }),
+    );
     await waitFor(() => expect(mocks.disable).toHaveBeenCalledTimes(1));
   });
 });

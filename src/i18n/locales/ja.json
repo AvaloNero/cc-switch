@@ -1677,7 +1677,7 @@
       "security": "プロバイダー認証情報は CC Switch のプロバイダーデータベースに保存され、設定済みのバックアップやクラウド同期に含まれる場合があります。有効な値は Windows のユーザー環境またはユーザー専用 Shell ファイルにも平文で書き込まれ、新しいプロセスに継承されます。",
       "conflict": "管理対象の環境変数が CC Switch 以外で変更されたため、自動的には上書きしません。",
       "applySuccess": "Copilot CLI の環境を更新しました。新しいターミナルを開いてください。",
-      "disableSuccess": "Copilot CLI の元の環境を復元しました。",
+      "disableSuccess": "GitHub Copilot の公式プロバイダーに戻しました。",
       "form": {
         "defaultModel": "既定モデル",
         "defaultModelHint": "各 Copilot CLI プロバイダーに設定できるモデルは 1 つだけです。プロバイダーを切り替えると、このモデルが直接使用されます。",
