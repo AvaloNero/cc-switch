@@ -166,7 +166,7 @@ describe("RequestLogTable", () => {
           {
             requestId: "vscode-session-1",
             providerId: "vscode-copilot",
-            providerName: "VSCode Copilot",
+            providerName: "VS Code Copilot (Session)",
             appType: "copilot-byok",
             model: "oswe-vscode-prime",
             modelDisplayName: "Raptor mini",
@@ -190,7 +190,7 @@ describe("RequestLogTable", () => {
           {
             requestId: "vscode-session-2",
             providerId: "vscode-copilot",
-            providerName: "VSCode Copilot",
+            providerName: "VS Code Copilot (Session)",
             appType: "copilot-byok",
             model: "MiniMax-M3",
             modelDisplayName: "MiniMax-M3",

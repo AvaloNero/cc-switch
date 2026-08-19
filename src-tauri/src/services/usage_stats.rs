@@ -222,8 +222,8 @@ fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
          WHEN '_opencode_session' THEN 'OpenCode (Session)' \
          WHEN '_grok_session' THEN 'Grok Build (Session)' \
          WHEN '_pi_session' THEN 'Pi (Session)' \
-         WHEN '_copilot_cli_session' THEN 'Copilot CLI' \
-         WHEN 'vscode-copilot' THEN 'VSCode Copilot' \
+         WHEN '_copilot_cli_session' THEN 'Copilot CLI (Session)' \
+         WHEN 'vscode-copilot' THEN 'VS Code Copilot (Session)' \
          ELSE {log_alias}.provider_id END)"
     )
 }
@@ -3812,7 +3812,7 @@ mod tests {
 
         let provider_stats = db.get_provider_stats(None, None, Some("copilot-byok"), None, None)?;
         assert_eq!(provider_stats.len(), 1);
-        assert_eq!(provider_stats[0].provider_name, "VSCode Copilot");
+        assert_eq!(provider_stats[0].provider_name, "VS Code Copilot (Session)");
 
         let breakdown = crate::services::session_usage::get_data_source_breakdown(&db)?;
         assert_eq!(

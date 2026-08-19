@@ -7,8 +7,12 @@
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::provider::Provider;
+use crate::proxy::usage::calculator::CostCalculator;
+use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::SessionSyncResult;
-use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
+use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL;
+use crate::services::usage_stats::find_model_pricing;
+use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -19,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const APP_TYPE: &str = "copilot-cli";
 const DATA_SOURCE: &str = "copilot_cli_session";
 const PROVIDER_ID: &str = "_copilot_cli_session";
+const PROVIDER_NAME: &str = "Copilot CLI (Session)";
 const MAX_SESSION_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_EVENTS: usize = 100_000;
 
@@ -51,6 +56,9 @@ fn sync_files(db: &Database, files: &[std::path::PathBuf]) -> Result<SessionSync
         files_scanned: files.len().min(u32::MAX as usize) as u32,
         ..Default::default()
     };
+    result.imported = result
+        .imported
+        .saturating_add(migrate_legacy_unpriced_rows(db)?);
 
     for path in files {
         match parse_snapshot(path) {
@@ -73,12 +81,12 @@ fn sync_files(db: &Database, files: &[std::path::PathBuf]) -> Result<SessionSync
 fn sync_provider(db: &Database) -> Result<(), AppError> {
     let settings = json!({
         "source": DATA_SOURCE,
-        "costAttribution": "unavailable"
+        "costAttribution": "model"
     });
     if db
         .get_provider_by_id(PROVIDER_ID, APP_TYPE)?
         .is_some_and(|provider| {
-            provider.name == "Copilot CLI"
+            provider.name == PROVIDER_NAME
                 && provider.settings_config == settings
                 && provider.icon.as_deref() == Some("githubcopilot")
         })
@@ -87,13 +95,42 @@ fn sync_provider(db: &Database) -> Result<(), AppError> {
     }
     let mut provider = Provider::with_id(
         PROVIDER_ID.to_string(),
-        "Copilot CLI".to_string(),
+        PROVIDER_NAME.to_string(),
         settings,
         Some("https://github.com/features/copilot".to_string()),
     );
     provider.category = Some("Copilot CLI".to_string());
     provider.icon = Some("githubcopilot".to_string());
     db.save_provider(APP_TYPE, &provider)
+}
+
+/// Earlier Copilot CLI imports explicitly used a zero multiplier because the
+/// session log cannot identify the provider. Model-based pricing does not need
+/// that provider identity: the recorded model is the pricing key. Normalize
+/// existing rows before the generic missing-cost backfill runs so historical
+/// sessions gain prices too, even if their JSONL file is no longer present.
+fn migrate_legacy_unpriced_rows(db: &Database) -> Result<u32, AppError> {
+    let changed = {
+        let conn = lock_conn!(db.conn);
+        conn.execute(
+            "UPDATE proxy_request_logs
+             SET cost_multiplier = '1.0', input_token_semantics = ?1
+             WHERE data_source = ?2
+               AND (cost_multiplier != '1.0' OR input_token_semantics != ?1)",
+            rusqlite::params![INPUT_TOKEN_SEMANTICS_TOTAL, DATA_SOURCE],
+        )
+        .map_err(|error| {
+            AppError::Database(format!("迁移 Copilot CLI 模型计价记录失败: {error}"))
+        })?
+    };
+
+    if changed > 0 {
+        if let Err(error) = db.backfill_missing_usage_costs() {
+            log::warn!("Copilot CLI 历史模型费用回填失败，将在后续价格同步时重试: {error}");
+        }
+    }
+
+    Ok(changed.min(u32::MAX as usize) as u32)
 }
 
 fn parse_snapshot(path: &Path) -> Result<Option<SessionSnapshot>, AppError> {
@@ -242,11 +279,42 @@ fn upsert_metric(
     metric: &ModelMetric,
 ) -> Result<bool, AppError> {
     let conn = lock_conn!(db.conn);
-    // Copilot CLI's session event identifies the model but not whether that
-    // model ran through the GitHub subscription or a BYOK provider. Assigning
-    // catalog pricing by model name alone would fabricate historical costs, so
-    // imported CLI rows intentionally remain unpriced while preserving tokens.
-    let unpriced = "0";
+    // The session event cannot identify the provider, but it does carry the
+    // actual model. Price that model against CC Switch's model-pricing table;
+    // this is an API-equivalent estimate rather than a GitHub subscription
+    // charge. A missing price stays at zero with multiplier 1 so adding the
+    // model price later can backfill the row.
+    let usage = TokenUsage {
+        input_tokens: metric.input_tokens.min(u32::MAX as i64) as u32,
+        output_tokens: metric.output_tokens.min(u32::MAX as i64) as u32,
+        cache_read_tokens: metric.cache_read_tokens.min(u32::MAX as i64) as u32,
+        cache_creation_tokens: metric.cache_write_tokens.min(u32::MAX as i64) as u32,
+        model: Some(metric.model.clone()),
+        message_id: None,
+    };
+    let costs = find_model_pricing(&conn, &metric.model)
+        .map(|pricing| CostCalculator::calculate_for_app(APP_TYPE, &usage, &pricing, Decimal::ONE));
+    let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = costs
+        .map_or_else(
+            || {
+                (
+                    "0".to_string(),
+                    "0".to_string(),
+                    "0".to_string(),
+                    "0".to_string(),
+                    "0".to_string(),
+                )
+            },
+            |cost| {
+                (
+                    cost.input_cost.to_string(),
+                    cost.output_cost.to_string(),
+                    cost.cache_read_cost.to_string(),
+                    cost.cache_creation_cost.to_string(),
+                    cost.total_cost.to_string(),
+                )
+            },
+        );
     let request_id = request_id(&snapshot.session_id, &metric.model);
 
     conn.execute(
@@ -272,7 +340,8 @@ fn upsert_metric(
             cache_read_cost_usd = excluded.cache_read_cost_usd,
             cache_creation_cost_usd = excluded.cache_creation_cost_usd,
             total_cost_usd = excluded.total_cost_usd,
-            cost_multiplier = excluded.cost_multiplier
+            cost_multiplier = excluded.cost_multiplier,
+            input_token_semantics = excluded.input_token_semantics
         WHERE data_source = 'copilot_cli_session'
           AND (input_tokens != excluded.input_tokens
             OR output_tokens != excluded.output_tokens
@@ -283,7 +352,8 @@ fn upsert_metric(
             OR cache_read_cost_usd != excluded.cache_read_cost_usd
             OR cache_creation_cost_usd != excluded.cache_creation_cost_usd
             OR total_cost_usd != excluded.total_cost_usd
-            OR cost_multiplier != excluded.cost_multiplier)",
+            OR cost_multiplier != excluded.cost_multiplier
+            OR input_token_semantics != excluded.input_token_semantics)",
         rusqlite::params![
             request_id,
             PROVIDER_ID,
@@ -295,12 +365,12 @@ fn upsert_metric(
             metric.output_tokens,
             metric.cache_read_tokens,
             metric.cache_write_tokens,
-            INPUT_TOKEN_SEMANTICS_FRESH,
-            unpriced,
-            unpriced,
-            unpriced,
-            unpriced,
-            unpriced,
+            INPUT_TOKEN_SEMANTICS_TOTAL,
+            input_cost,
+            output_cost,
+            cache_read_cost,
+            cache_creation_cost,
+            total_cost,
             0i64,
             Option::<i64>::None,
             200i64,
@@ -308,7 +378,7 @@ fn upsert_metric(
             snapshot.session_id,
             Some(DATA_SOURCE),
             1i64,
-            unpriced,
+            "1.0",
             snapshot.created_at,
             DATA_SOURCE,
         ],
@@ -418,6 +488,117 @@ mod tests {
             .map_err(|error| AppError::Database(error.to_string()))?;
         assert_eq!(rows, 1);
         assert_eq!(input_tokens, 25);
+        Ok(())
+    }
+
+    #[test]
+    fn session_usage_is_priced_by_recorded_model_with_total_input_semantics() -> Result<(), AppError>
+    {
+        let db = Database::memory()?;
+        sync_provider(&db)?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "UPDATE providers SET name = 'Copilot CLI'
+                 WHERE id = ?1 AND app_type = ?2",
+                rusqlite::params![PROVIDER_ID, APP_TYPE],
+            )?;
+        }
+        sync_provider(&db)?;
+        let snapshot = SessionSnapshot {
+            session_id: "priced-session".to_string(),
+            created_at: 1_786_123_456,
+            metrics: vec![ModelMetric {
+                model: "MiniMax-M3".to_string(),
+                input_tokens: 1_000_000,
+                output_tokens: 100_000,
+                cache_read_tokens: 200_000,
+                cache_write_tokens: 100_000,
+            }],
+        };
+
+        assert!(upsert_metric(&db, &snapshot, &snapshot.metrics[0])?);
+        let conn = lock_conn!(db.conn);
+        let row: (String, String, String, String, String, String, i64) = conn
+            .query_row(
+                "SELECT input_cost_usd, output_cost_usd, cache_read_cost_usd,
+                        cache_creation_cost_usd, total_cost_usd, cost_multiplier,
+                        input_token_semantics
+                 FROM proxy_request_logs WHERE request_id = ?1",
+                [request_id("priced-session", "MiniMax-M3")],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .map_err(|error| AppError::Database(error.to_string()))?;
+
+        // MiniMax M3: $0.30 input / $1.20 output / $0.06 cache-read per M.
+        // Fresh input is 1M - 200k read - 100k write = 700k.
+        assert_eq!(row.0.parse::<Decimal>().unwrap(), Decimal::new(21, 2));
+        assert_eq!(row.1.parse::<Decimal>().unwrap(), Decimal::new(12, 2));
+        assert_eq!(row.2.parse::<Decimal>().unwrap(), Decimal::new(12, 3));
+        assert_eq!(row.3.parse::<Decimal>().unwrap(), Decimal::ZERO);
+        assert_eq!(row.4.parse::<Decimal>().unwrap(), Decimal::new(342, 3));
+        assert_eq!(row.5, "1.0");
+        assert_eq!(row.6, INPUT_TOKEN_SEMANTICS_TOTAL);
+        let provider_name: String = conn
+            .query_row(
+                "SELECT name FROM providers WHERE id = ?1 AND app_type = ?2",
+                rusqlite::params![PROVIDER_ID, APP_TYPE],
+                |provider_row| provider_row.get(0),
+            )
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        assert_eq!(provider_name, PROVIDER_NAME);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_zero_multiplier_rows_are_repriced_by_model() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let snapshot = SessionSnapshot {
+            session_id: "legacy-session".to_string(),
+            created_at: 1_786_123_456,
+            metrics: vec![ModelMetric {
+                model: "MiniMax-M3".to_string(),
+                input_tokens: 1_000_000,
+                output_tokens: 100_000,
+                cache_read_tokens: 200_000,
+                cache_write_tokens: 100_000,
+            }],
+        };
+        upsert_metric(&db, &snapshot, &snapshot.metrics[0])?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "UPDATE proxy_request_logs
+                 SET cost_multiplier = '0', input_token_semantics = 2,
+                     input_cost_usd = '0', output_cost_usd = '0',
+                     cache_read_cost_usd = '0', cache_creation_cost_usd = '0',
+                     total_cost_usd = '0'
+                 WHERE data_source = ?1",
+                [DATA_SOURCE],
+            )?;
+        }
+
+        assert_eq!(migrate_legacy_unpriced_rows(&db)?, 1);
+        let conn = lock_conn!(db.conn);
+        let (multiplier, semantics, total): (String, i64, String) = conn.query_row(
+            "SELECT cost_multiplier, input_token_semantics, total_cost_usd
+             FROM proxy_request_logs WHERE data_source = ?1",
+            [DATA_SOURCE],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(multiplier, "1.0");
+        assert_eq!(semantics, INPUT_TOKEN_SEMANTICS_TOTAL);
+        assert_eq!(total.parse::<Decimal>().unwrap(), Decimal::new(342, 3));
         Ok(())
     }
 

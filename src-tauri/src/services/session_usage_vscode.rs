@@ -30,6 +30,7 @@ const DATA_SOURCE: &str = "vscode_session";
 const REQUEST_ID_PREFIX: &str = "vscode_session:";
 const PROVIDER_ID: &str = "vscode-copilot";
 const PROVIDER_NAME: &str = "VSCode Copilot";
+const SESSION_PROVIDER_NAME: &str = "VS Code Copilot (Session)";
 // v8 replays v7 rows once after VS Code session details became exempt from the
 // generic 30-day rollup. Stable request IDs can now be upserted on catalog or
 // JSONL changes without re-aggregating the same historical request.
@@ -1054,7 +1055,7 @@ fn sync_provider(db: &Database, entry: &CatalogEntry) -> Result<(), AppError> {
         "modelNames": model_names,
     });
     if existing.as_ref().is_some_and(|provider| {
-        provider.name == PROVIDER_NAME
+        provider.name == SESSION_PROVIDER_NAME
             && provider.settings_config == settings_config
             && provider.category.as_deref() == Some("VS Code Copilot")
             && provider.icon == icon
@@ -1066,7 +1067,7 @@ fn sync_provider(db: &Database, entry: &CatalogEntry) -> Result<(), AppError> {
     }
     let mut provider = Provider::with_id(
         PROVIDER_ID.to_string(),
-        PROVIDER_NAME.to_string(),
+        SESSION_PROVIDER_NAME.to_string(),
         settings_config,
         None,
     );
@@ -1713,6 +1714,12 @@ mod tests {
         assert_eq!(sync_copilot_provider(&db)?, 0);
         {
             let conn = lock_conn!(db.conn);
+            // Simulate the pre-session-suffix provider row. The next sync must
+            // rename it so existing detail and rollup joins display uniformly.
+            conn.execute(
+                "UPDATE providers SET name = ?1 WHERE id = ?2 AND app_type = ?3",
+                rusqlite::params![PROVIDER_NAME, PROVIDER_ID, APP_TYPE],
+            )?;
             for (request_id, request_model, multiplier, total_cost) in [
                 ("official", "copilot/auto", "1.0", "0.0084"),
                 (
@@ -1779,6 +1786,12 @@ mod tests {
                 ),
             ]
         );
+        let provider_name: String = conn.query_row(
+            "SELECT name FROM providers WHERE id = ?1 AND app_type = ?2",
+            rusqlite::params![PROVIDER_ID, APP_TYPE],
+            |row| row.get(0),
+        )?;
+        assert_eq!(provider_name, SESSION_PROVIDER_NAME);
         drop(conn);
         assert_eq!(sync_copilot_provider(&db)?, 0);
         Ok(())
@@ -2067,7 +2080,7 @@ mod tests {
         assert_eq!(row.0, PROVIDER_ID);
         assert_eq!(row.4, "0");
         assert_eq!(row.5, "0");
-        assert_eq!(provider_name, PROVIDER_NAME);
+        assert_eq!(provider_name, SESSION_PROVIDER_NAME);
         let settings_config: String = conn.query_row(
             "SELECT settings_config FROM providers WHERE id = ?1 AND app_type = ?2",
             rusqlite::params![PROVIDER_ID, APP_TYPE],

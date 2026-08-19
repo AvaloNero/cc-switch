@@ -64,7 +64,9 @@ Copilot CLI does not support VS Code-style Prompt Files. The shared CC Switch ed
 
 Usage is reconstructed from the latest cumulative `session.shutdown.modelMetrics` snapshot in each session. Input, output, cache-read, and cache-write tokens are upserted under stable session/model request IDs, so resuming or rescanning a session replaces the previous totals instead of double-counting them. Active sessions without a shutdown snapshot are skipped until a complete cumulative snapshot exists.
 
-Copilot CLI's event identifies the model but does not record whether that model ran through the GitHub subscription or a BYOK provider. Imported CLI session rows are therefore deliberately unpriced; assigning catalog pricing by model name alone would fabricate historical costs.
+Copilot CLI's event identifies the model but does not record whether that model ran through the GitHub subscription or a BYOK provider. Usage is therefore attributed to the synthetic **Copilot CLI (Session)** source rather than a catalog provider, matching **VS Code Copilot (Session)** and the other session-log importers. Cost is estimated from the recorded model and CC Switch's model-pricing table with multiplier 1. This is an API-equivalent model estimate, not the amount charged by a GitHub subscription. A model without a configured price remains at zero and is backfilled after that model's price is added.
+
+The cumulative `inputTokens` value includes cache reads and cache writes. CC Switch stores that total-input semantic explicitly, subtracts both cache counters for fresh-input statistics and input pricing, and prices the cache components separately.
 
 ## Upstream references
 
