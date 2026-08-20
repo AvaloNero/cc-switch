@@ -4423,16 +4423,43 @@ fn run_windows_start_command(args: &[&str], terminal_name: &str) -> Result<(), S
 ///
 /// **Security**：`command_line` 会被原样拼进 shell/batch 脚本，调用方必须
 /// 保证它是可信字符串（当前只由后端硬编码调用）。
+fn unique_terminal_script_path(temp_dir: &Path, label: &str, extension: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let safe_label = label
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let safe_label = if safe_label.is_empty() {
+        "terminal"
+    } else {
+        &safe_label
+    };
+    temp_dir.join(format!(
+        "cc_switch_{safe_label}_{}_{timestamp}_{counter}.{extension}",
+        std::process::id()
+    ))
+}
+
 pub(crate) fn launch_terminal_running(command_line: &str, label: &str) -> Result<(), String> {
     let temp_dir = std::env::temp_dir();
-    let pid = std::process::id();
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     let (script_file, script_content) = {
-        let file = temp_dir.join(format!("cc_switch_{}_{}.sh", label, pid));
+        let file = unique_terminal_script_path(&temp_dir, label, "sh");
         let content = format!(
             r#"#!/usr/bin/env sh
-trap 'rm -f "{script_path}"' EXIT
+trap 'rm -f -- "$0"' EXIT
 echo "[cc-switch] Starting: {label}"
 echo ""
 {cmd}
@@ -4440,7 +4467,6 @@ echo ""
 echo "[cc-switch] Command exited. Press Enter to close."
 read -r _
 "#,
-            script_path = file.display(),
             label = label,
             cmd = command_line,
         );
@@ -4555,13 +4581,14 @@ read -r _
         let preferred = crate::settings::get_preferred_terminal();
         let terminal = preferred.as_deref().unwrap_or("cmd");
 
-        let bat_file = temp_dir.join(format!("cc_switch_{}_{}.bat", label, pid));
+        let bat_file = unique_terminal_script_path(&temp_dir, label, "bat");
         let content = format!(
             "@echo off\r\necho [cc-switch] Starting: {label}\r\necho.\r\n{cmd}\r\necho.\r\necho [cc-switch] Command exited. Press any key to close.\r\npause >nul\r\ndel \"%~f0\" >nul 2>&1\r\n",
             label = label,
             cmd = command_line,
         );
-        std::fs::write(&bat_file, &content).map_err(|e| format!("写入批处理文件失败: {e}"))?;
+        crate::config::atomic_write_private(&bat_file, content.as_bytes())
+            .map_err(|e| format!("写入批处理文件失败: {e}"))?;
 
         let bat_path = bat_file.to_string_lossy();
         let ps_cmd = format!("& '{}'", bat_path);
@@ -4597,7 +4624,7 @@ read -r _
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        let _ = (temp_dir, pid, command_line, label);
+        let _ = (temp_dir, command_line, label);
         Err("不支持的操作系统".to_string())
     }
 }
@@ -4736,6 +4763,20 @@ pub async fn set_window_theme(window: tauri::Window, theme: String) -> Result<()
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn terminal_launcher_uses_unique_sanitized_script_paths() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let first = unique_terminal_script_path(temp.path(), "copilot/cli", "sh");
+        let second = unique_terminal_script_path(temp.path(), "copilot/cli", "sh");
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(temp.path()));
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("cc_switch_copilot_cli_")));
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

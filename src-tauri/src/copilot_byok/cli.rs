@@ -1185,12 +1185,22 @@ where
         store.cli = previous;
         let persist_error = persist(store).err();
         let restore_error = restore_snapshot(environment, &before).err();
+        let rebroadcast_error = if restore_error.is_none() {
+            environment.broadcast_change(&desired, &before).err()
+        } else {
+            None
+        };
         let mut details = vec![error.to_string()];
         if let Some(error) = persist_error {
             details.push(format!("failed to roll back selection: {error}"));
         }
         if let Some(error) = restore_error {
             details.push(format!("failed to roll back environment: {error}"));
+        }
+        if let Some(error) = rebroadcast_error {
+            details.push(format!(
+                "failed to broadcast the restored environment: {error}"
+            ));
         }
         return Err(AppError::Config(format!(
             "Failed to activate Copilot CLI shell integration: {}",
@@ -1258,12 +1268,22 @@ where
         store.cli = previous;
         let persist_error = persist(store).err();
         let restore_error = restore_snapshot(environment, &before).err();
+        let rebroadcast_error = if restore_error.is_none() {
+            environment.broadcast_change(&desired, &before).err()
+        } else {
+            None
+        };
         let mut details = vec![error.to_string()];
         if let Some(error) = persist_error {
             details.push(format!("failed to restore selection: {error}"));
         }
         if let Some(error) = restore_error {
             details.push(format!("failed to restore environment: {error}"));
+        }
+        if let Some(error) = rebroadcast_error {
+            details.push(format!(
+                "failed to broadcast the restored environment: {error}"
+            ));
         }
         return Err(AppError::Config(format!(
             "Failed to activate GitHub Copilot official provider: {}",
@@ -1887,6 +1907,10 @@ mod tests {
             Some("unmanaged-model")
         );
         assert_eq!(store.cli, CopilotCliConfig::default());
+        assert_eq!(environment.broadcasts.get(), 2);
+        assert!(error
+            .to_string()
+            .contains("failed to broadcast the restored environment"));
     }
 
     #[test]

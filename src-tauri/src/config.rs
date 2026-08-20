@@ -319,6 +319,12 @@ pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppErr
     write_json_file_with_contents(path, data).map(|_| ())
 }
 
+/// 原子写入包含凭据的 JSON 文件。Unix 上从临时文件创建开始即使用 0600。
+pub fn write_json_file_private<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
+    let contents = serialize_json_file_contents(data)?;
+    atomic_write_private(path, &contents)
+}
+
 /// 原子写入文本文件（用于 TOML/纯文本）
 pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {

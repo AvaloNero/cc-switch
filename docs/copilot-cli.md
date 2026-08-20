@@ -4,7 +4,7 @@
 
 CC Switch exposes GitHub Copilot CLI as an application independent from VS Code Copilot. It has its own app-switcher entry, visibility setting, official GitHub Copilot glyph (`githubcopilot`), provider catalog, active provider, sessions, and usage filter. Editing or deleting a provider in one Copilot application does not modify the other application's catalog.
 
-The portable provider catalog uses the `copilot-cli-catalog` provider namespace and participates in the normal database export, WebDAV, and S3 synchronization flows. The catalog always contains a protected **GitHub Copilot Official** provider (`copilot-cli-official`) with `category: official`: it cannot be edited or deleted, but it can be moved like every other provider. Each custom provider defines exactly one default model. This constraint applies only to Copilot CLI; VS Code Copilot continues to use the separate `copilot-byok-catalog` namespace and supports multiple models under one provider. The active custom provider/default model and last applied environment are device state in `copilot-byok.json`, because environment changes are specific to the machine.
+The portable provider catalog uses the `copilot-cli-catalog` provider namespace and participates in the normal database export, WebDAV, and S3 synchronization flows. The catalog always contains a protected **GitHub Copilot Official** provider (`copilot-cli-official`) with `category: official`: it cannot be edited or deleted, but it can be moved like every other provider. Each custom provider defines exactly one default model. This constraint applies only to Copilot CLI; VS Code Copilot continues to use the separate `copilot-byok-catalog` namespace and supports multiple models under one provider. The active custom provider/default model and last applied environment are device state in `~/.cc-switch/copilot-byok.json`, because environment changes are specific to the machine. This private file always stays under the default local home directory even when the portable application configuration directory is overridden; a matching legacy copy in the override directory is migrated and removed automatically.
 
 ## Provider switching
 
@@ -19,6 +19,8 @@ CC Switch manages the provider variables supported by Copilot CLI:
 - `COPILOT_PROVIDER_HEADERS`
 - `COPILOT_MODEL`, `COPILOT_PROVIDER_MODEL_ID`, and `COPILOT_PROVIDER_WIRE_MODEL`
 - `COPILOT_PROVIDER_MAX_PROMPT_TOKENS` and `COPILOT_PROVIDER_MAX_OUTPUT_TOKENS`
+
+This integration was validated with GitHub Copilot CLI `1.0.81-3`. Before using it with an older build, confirm that `copilot help providers` lists the variables above; upgrade the CLI if any required routing, transport, or token-limit variable is absent.
 
 The provider editor follows the provider-switching model used by the CLI applications in CC Switch: a Copilot CLI provider has one default model, and activating the provider applies that model directly. There is no independent model selector and no VS Code-style multi-model list. The backend rejects CLI provider records containing zero or multiple models. Existing multi-model CLI records are migrated once by retaining the active model for the active provider and the first enabled model for every other provider. The Windows tray exposes the same independent provider list and refreshes immediately after a switch made from either the tray or the main window.
 

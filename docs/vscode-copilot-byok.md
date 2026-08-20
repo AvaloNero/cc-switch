@@ -30,7 +30,7 @@ Before the first write to an existing target, CC Switch creates:
 chatLanguageModels.json.cc-switch.bak
 ```
 
-The portable provider catalog is stored in the normal CC Switch provider database under its own `copilot-byok-catalog` namespace, so database export, WebDAV, and S3 synchronization include it without colliding with the normalized `VSCode Copilot` usage provider. Selected VS Code editions/profiles and custom absolute paths remain in the device-local `copilot-byok.json` store and are intentionally excluded from portable catalog data. Catalog and profile updates are preflighted and rollback-protected. If profile synchronization fails, CC Switch restores the previous catalog and target snapshots. Startup synchronization reconciles the catalog and selected targets after an interrupted process.
+The portable provider catalog is stored in the normal CC Switch provider database under its own `copilot-byok-catalog` namespace, so database export, WebDAV, and S3 synchronization include it without colliding with the normalized `VSCode Copilot` usage provider. Selected VS Code editions/profiles and custom absolute paths remain in the device-local `~/.cc-switch/copilot-byok.json` store and are intentionally excluded from portable catalog data. The store always uses the default local home directory, independent of any portable application configuration override; a matching legacy copy in the override directory is migrated and removed automatically. Catalog and profile updates are preflighted and rollback-protected. If profile synchronization fails, CC Switch restores the previous catalog and target snapshots. Startup synchronization reconciles the catalog and selected targets after an interrupted process.
 
 ## Existing configuration import
 
@@ -47,7 +47,7 @@ The portable provider catalog is stored in the normal CC Switch provider databas
 
 Credentials entered directly in CC Switch are materialized into each model's request headers in `chatLanguageModels.json`, because an external application cannot create the corresponding VS Code SecretStorage entry. Imported `${input:...}` SecretStorage references remain references and are not converted to plaintext. Protect both the VS Code configuration file and the CC Switch database/backup files as credential-bearing files.
 
-The CC Switch store file is restricted to mode `0600` on Unix platforms.
+The CC Switch store file is created and atomically replaced with mode `0600` on Unix platforms.
 
 ## Scope
 

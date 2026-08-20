@@ -579,15 +579,25 @@ pub(crate) fn parse_store_value(mut value: Value) -> Result<CopilotByokStore, Ap
 }
 
 pub fn store_path() -> PathBuf {
-    crate::config::get_app_config_dir().join(STORE_FILE)
+    // This file contains device-specific absolute paths and the last applied
+    // Copilot CLI environment. Keep it outside the portable app-config
+    // override, which users may intentionally place in Dropbox/OneDrive.
+    crate::config::get_home_dir()
+        .join(".cc-switch")
+        .join(STORE_FILE)
 }
 
-pub fn load_store() -> Result<CopilotByokStore, AppError> {
-    let path = store_path();
+fn legacy_portable_store_path() -> Option<PathBuf> {
+    let local = store_path();
+    let legacy = crate::config::get_app_config_dir().join(STORE_FILE);
+    (path_identity_key(&local) != path_identity_key(&legacy)).then_some(legacy)
+}
+
+fn load_store_at(path: &Path) -> Result<CopilotByokStore, AppError> {
     if !path.exists() {
         return Ok(CopilotByokStore::default());
     }
-    let metadata = fs::symlink_metadata(&path).map_err(|error| AppError::io(&path, error))?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| AppError::io(path, error))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(AppError::InvalidInput(format!(
             "Copilot BYOK store is not a regular file: {}",
@@ -601,22 +611,98 @@ pub fn load_store() -> Result<CopilotByokStore, AppError> {
             path.display()
         )));
     }
-    let text = fs::read_to_string(&path).map_err(|error| AppError::io(&path, error))?;
-    let value = serde_json::from_str(&text).map_err(|error| AppError::json(&path, error))?;
+    let text = fs::read_to_string(path).map_err(|error| AppError::io(path, error))?;
+    let value = serde_json::from_str(&text).map_err(|error| AppError::json(path, error))?;
     parse_store_value(value)
 }
 
-pub fn save_store(store: &CopilotByokStore) -> Result<(), AppError> {
+fn save_store_at(path: &Path, store: &CopilotByokStore) -> Result<CopilotByokStore, AppError> {
     let mut normalized = store.clone();
     normalize_store(&mut normalized)?;
-    let path = store_path();
-    crate::config::write_json_file(&path, &normalized)?;
+    crate::config::write_json_file_private(path, &normalized)?;
+    Ok(normalized)
+}
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-            .map_err(|error| AppError::io(&path, error))?;
+fn remove_legacy_store_best_effort(path: &Path) {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            log::warn!(
+                "Could not inspect legacy portable Copilot BYOK store {}: {error}",
+                path.display()
+            );
+            return;
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        log::warn!(
+            "Refusing to remove non-regular legacy Copilot BYOK store: {}",
+            path.display()
+        );
+        return;
+    }
+    if let Err(error) = fs::remove_file(path) {
+        log::warn!(
+            "Could not remove legacy portable Copilot BYOK store {}: {error}",
+            path.display()
+        );
+    }
+}
+
+fn remove_equivalent_legacy_store_best_effort(path: &Path, local: &CopilotByokStore) {
+    if !path.exists() {
+        return;
+    }
+    match load_store_at(path) {
+        Ok(legacy) if &legacy == local => remove_legacy_store_best_effort(path),
+        Ok(_) => log::warn!(
+            "Preserving legacy portable Copilot BYOK store because it differs from device-local state: {}",
+            path.display()
+        ),
+        Err(error) => log::warn!(
+            "Preserving unreadable legacy portable Copilot BYOK store {}: {error}",
+            path.display()
+        ),
+    }
+}
+
+fn load_store_with_legacy(
+    local_path: &Path,
+    legacy_path: Option<&Path>,
+) -> Result<CopilotByokStore, AppError> {
+    if local_path.exists() {
+        let store = load_store_at(local_path)?;
+        if let Some(legacy_path) = legacy_path {
+            remove_equivalent_legacy_store_best_effort(legacy_path, &store);
+        }
+        return Ok(store);
+    }
+
+    let Some(legacy_path) = legacy_path.filter(|path| path.exists()) else {
+        return Ok(CopilotByokStore::default());
+    };
+    let store = load_store_at(legacy_path)?;
+    let local_store = save_store_at(local_path, &store)?;
+    remove_equivalent_legacy_store_best_effort(legacy_path, &local_store);
+    log::info!(
+        "Migrated device-local Copilot BYOK state from {} to {}",
+        legacy_path.display(),
+        local_path.display()
+    );
+    Ok(local_store)
+}
+
+pub fn load_store() -> Result<CopilotByokStore, AppError> {
+    let local_path = store_path();
+    let legacy_path = legacy_portable_store_path();
+    load_store_with_legacy(&local_path, legacy_path.as_deref())
+}
+
+pub fn save_store(store: &CopilotByokStore) -> Result<(), AppError> {
+    let normalized = save_store_at(&store_path(), store)?;
+    if let Some(legacy_path) = legacy_portable_store_path() {
+        remove_equivalent_legacy_store_best_effort(&legacy_path, &normalized);
     }
     Ok(())
 }
@@ -665,6 +751,80 @@ pub(crate) fn apply_group_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrates_portable_store_to_private_device_path() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let local = temp.path().join("local").join(STORE_FILE);
+        let legacy = temp.path().join("portable").join(STORE_FILE);
+        let mut store = CopilotByokStore {
+            targets_initialized: true,
+            selected_target_ids: vec!["stable:default".to_string()],
+            cli: CopilotCliConfig {
+                official_override_active: true,
+                ..CopilotCliConfig::default()
+            },
+            ..CopilotByokStore::default()
+        };
+        store.cli.managed_environment.last_written.insert(
+            "COPILOT_PROVIDER_API_KEY".to_string(),
+            Some("secret".to_string()),
+        );
+        save_store_at(&legacy, &store).expect("write legacy store");
+
+        let migrated = load_store_with_legacy(&local, Some(&legacy)).expect("migrate store");
+
+        assert_eq!(migrated, store);
+        assert!(local.is_file());
+        assert!(!legacy.exists());
+        assert_eq!(
+            load_store_at(&local)
+                .expect("read migrated store")
+                .cli
+                .managed_environment
+                .last_written["COPILOT_PROVIDER_API_KEY"]
+                .as_deref(),
+            Some("secret")
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&local)
+                    .expect("migrated metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_different_portable_store_when_device_store_exists() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let local = temp.path().join("local").join(STORE_FILE);
+        let legacy = temp.path().join("portable").join(STORE_FILE);
+        let mut local_store = CopilotByokStore {
+            targets_initialized: true,
+            selected_target_ids: vec!["stable:default".to_string()],
+            ..CopilotByokStore::default()
+        };
+        let legacy_store = CopilotByokStore {
+            targets_initialized: true,
+            selected_target_ids: vec!["stable:insiders".to_string()],
+            ..CopilotByokStore::default()
+        };
+        local_store = save_store_at(&local, &local_store).expect("write local store");
+        save_store_at(&legacy, &legacy_store).expect("write legacy store");
+
+        let loaded = load_store_with_legacy(&local, Some(&legacy)).expect("load local store");
+
+        assert_eq!(loaded, local_store);
+        assert!(legacy.is_file());
+        assert_eq!(load_store_at(&legacy).expect("read legacy"), legacy_store);
+    }
 
     #[test]
     fn migrates_legacy_single_path_store() {
