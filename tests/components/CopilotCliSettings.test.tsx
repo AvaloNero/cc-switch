@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   openTerminal: vi.fn(),
   pickDirectory: vi.fn(),
   vscodeGetState: vi.fn(),
+  usageFooter: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -59,6 +60,15 @@ vi.mock("@/components/UsageScriptModal", () => ({
         保存 {provider.name} 用量
       </button>
     ) : null,
+}));
+
+vi.mock("@/components/UsageFooter", () => ({
+  default: (props: any) => {
+    mocks.usageFooter(props);
+    return props.usageEnabled ? (
+      <div data-testid={`usage-${props.appId}-${props.providerId}`} />
+    ) : null;
+  },
 }));
 
 vi.mock("sonner", () => ({
@@ -194,6 +204,7 @@ describe("CopilotCliSettings", () => {
     mocks.openTerminal.mockReset();
     mocks.pickDirectory.mockReset();
     mocks.vscodeGetState.mockReset();
+    mocks.usageFooter.mockReset();
 
     mocks.cliGetState.mockResolvedValue(cliState(false));
     mocks.setSelection.mockResolvedValue(cliState(true));
@@ -328,6 +339,40 @@ describe("CopilotCliSettings", () => {
         "cli-provider",
         "C:\\Work",
       ),
+    );
+  });
+
+  it("queries enabled usage on the selected Copilot CLI provider card", async () => {
+    const next = cliState(true);
+    next.groups = next.groups.map((candidate) =>
+      candidate.id === group.id
+        ? {
+            ...candidate,
+            usageScript: {
+              enabled: true,
+              language: "javascript",
+              code: "return { remaining: 1 };",
+              autoQueryInterval: 5,
+            },
+          }
+        : candidate,
+    );
+    mocks.cliGetState.mockResolvedValue(next);
+
+    render(<CopilotCliSettings />);
+
+    expect(
+      await screen.findByTestId("usage-copilot-cli-cli-provider"),
+    ).toBeInTheDocument();
+    expect(mocks.usageFooter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "copilot-cli",
+        providerId: "cli-provider",
+        usageEnabled: true,
+        isCurrent: true,
+        isInConfig: false,
+        inline: true,
+      }),
     );
   });
 });

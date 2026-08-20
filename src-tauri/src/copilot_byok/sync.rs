@@ -155,7 +155,21 @@ pub fn effective_selected_target_ids(
     discovered: &[VsCodeProfileTarget],
 ) -> Vec<String> {
     if store.targets_initialized {
-        return store.selected_target_ids.clone();
+        // Tolerate stale ids left behind by deleted VS Code profiles or removed
+        // custom targets: they no longer resolve to a path, so skip them here
+        // instead of failing every sync/import with "Unknown target". The store
+        // keeps the ids, so the selection revives if the profile reappears.
+        let available: HashSet<&str> = discovered
+            .iter()
+            .map(|target| target.id.as_str())
+            .chain(store.custom_targets.iter().map(|target| target.id.as_str()))
+            .collect();
+        return store
+            .selected_target_ids
+            .iter()
+            .filter(|id| available.contains(id.as_str()))
+            .cloned()
+            .collect();
     }
 
     discovered
@@ -234,7 +248,7 @@ fn snapshot_file(path: &Path) -> Result<FileSnapshot, AppError> {
 }
 
 fn restore_snapshot(path: &Path, snapshot: &FileSnapshot) -> Result<(), AppError> {
-    crate::file_transaction::restore_snapshot(path, snapshot, "Copilot BYOK config")
+    crate::file_transaction::restore_snapshot_private(path, snapshot, "Copilot BYOK config")
 }
 
 fn rollback_changes(changes: &[TargetChange]) -> Result<(), AppError> {
@@ -258,13 +272,15 @@ fn rollback_changes(changes: &[TargetChange]) -> Result<(), AppError> {
 }
 
 fn apply_change(change: &TargetChange) -> Result<(), AppError> {
+    // chatLanguageModels.json (and its backup) embed the provider API key in
+    // each model's requestHeaders, so both files are written owner-only.
     if change.create_backup {
         if let Some(contents) = &change.before.contents {
-            crate::config::atomic_write(&change.backup_path, contents)?;
+            crate::config::atomic_write_private(&change.backup_path, contents)?;
         }
     }
     match &change.after {
-        Some(contents) => crate::config::atomic_write(&change.path, contents),
+        Some(contents) => crate::config::atomic_write_private(&change.path, contents),
         None if change.path.exists() => {
             ensure_regular_target(&change.path)?;
             fs::remove_file(&change.path).map_err(|error| AppError::io(&change.path, error))
@@ -671,6 +687,48 @@ mod tests {
             super::super::vscode::VsCodeEdition::Stable,
         )];
         assert!(effective_selected_target_ids(&store, &targets).is_empty());
+    }
+
+    #[test]
+    fn effective_selection_skips_targets_that_no_longer_exist() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let mut store = custom_store(&[temp.path().join("chatLanguageModels.json")]);
+        store.selected_target_ids = vec![
+            "stable:profile:deleted".to_string(),
+            "stable:default".to_string(),
+            store.custom_targets[0].id.clone(),
+        ];
+        let custom_id = store.custom_targets[0].id.clone();
+        let targets = vec![target(
+            "stable:default",
+            super::super::vscode::VsCodeEdition::Stable,
+        )];
+
+        assert_eq!(
+            effective_selected_target_ids(&store, &targets),
+            vec!["stable:default".to_string(), custom_id]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_change_writes_credential_files_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = temp.path().join("chatLanguageModels.json");
+        let change = TargetChange {
+            path: path.clone(),
+            before: FileSnapshot { contents: None },
+            after: Some(b"[]".to_vec()),
+            backup_path: backup_path(&path),
+            backup_before: FileSnapshot { contents: None },
+            create_backup: false,
+        };
+
+        apply_change(&change).expect("apply change");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

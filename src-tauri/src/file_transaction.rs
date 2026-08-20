@@ -95,12 +95,35 @@ pub(crate) fn restore_snapshot(
     snapshot: &FileSnapshot,
     description: &str,
 ) -> Result<(), AppError> {
+    restore_snapshot_with(path, snapshot, description, false)
+}
+
+/// Same as [`restore_snapshot`], but recreated files are written owner-only on
+/// Unix because their contents may include credentials.
+pub(crate) fn restore_snapshot_private(
+    path: &Path,
+    snapshot: &FileSnapshot,
+    description: &str,
+) -> Result<(), AppError> {
+    restore_snapshot_with(path, snapshot, description, true)
+}
+
+fn restore_snapshot_with(
+    path: &Path,
+    snapshot: &FileSnapshot,
+    description: &str,
+    private: bool,
+) -> Result<(), AppError> {
     match &snapshot.contents {
         Some(contents) => {
             if metadata_if_exists(path)?.is_some() {
                 validate_existing_file(path, None, description)?;
             }
-            crate::config::atomic_write(path, contents)
+            if private {
+                crate::config::atomic_write_private(path, contents)
+            } else {
+                crate::config::atomic_write(path, contents)
+            }
         }
         None => match metadata_if_exists(path)? {
             Some(_) => {
@@ -268,5 +291,22 @@ mod tests {
             fs::read_to_string(second).expect("second unchanged"),
             "second-before"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_restore_recreates_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = temp.path().join("secret.json");
+        let snapshot = FileSnapshot {
+            contents: Some(b"secret".to_vec()),
+        };
+
+        restore_snapshot_private(&path, &snapshot, "test file").expect("restore");
+
+        assert_eq!(fs::read(&path).expect("contents"), b"secret");
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

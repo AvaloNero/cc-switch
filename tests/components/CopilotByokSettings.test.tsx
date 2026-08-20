@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   reorderGroups: vi.fn(),
   checkConnection: vi.fn(),
   updateUsageScript: vi.fn(),
+  usageFooter: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -49,6 +50,15 @@ vi.mock("@/components/UsageScriptModal", () => ({
         保存 {provider.name} 用量
       </button>
     ) : null,
+}));
+
+vi.mock("@/components/UsageFooter", () => ({
+  default: (props: any) => {
+    mocks.usageFooter(props);
+    return props.usageEnabled ? (
+      <div data-testid={`usage-${props.appId}-${props.providerId}`} />
+    ) : null;
+  },
 }));
 
 vi.mock("sonner", () => ({
@@ -172,6 +182,7 @@ const group: CopilotByokGroup = {
 describe("CopilotByokSettings", () => {
   beforeEach(() => {
     mocks.updateUsageScript.mockReset();
+    mocks.usageFooter.mockReset();
     mocks.getState.mockResolvedValue(state(true));
     mocks.setTargets.mockResolvedValue(state(false));
     mocks.importModels.mockResolvedValue({
@@ -266,6 +277,38 @@ describe("CopilotByokSettings", () => {
         "moonshot",
         expect.objectContaining({ enabled: true }),
       ),
+    );
+  });
+
+  it("queries enabled usage on VS Code Copilot provider cards", async () => {
+    const usageGroup: CopilotByokGroup = {
+      ...group,
+      usageScript: {
+        enabled: true,
+        language: "javascript",
+        code: "return { remaining: 1 };",
+        autoQueryInterval: 5,
+      },
+    };
+    mocks.getState.mockResolvedValue({
+      ...state(true),
+      groups: [usageGroup],
+    });
+
+    render(<CopilotByokSettings mode="catalog" />);
+
+    expect(
+      await screen.findByTestId("usage-copilot-byok-moonshot"),
+    ).toBeInTheDocument();
+    expect(mocks.usageFooter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "copilot-byok",
+        providerId: "moonshot",
+        usageEnabled: true,
+        isCurrent: true,
+        isInConfig: true,
+        inline: true,
+      }),
     );
   });
 

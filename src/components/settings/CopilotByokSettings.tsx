@@ -53,6 +53,7 @@ import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
 import { ProviderActions } from "@/components/providers/ProviderActions";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import UsageFooter from "@/components/UsageFooter";
 import UsageScriptModal from "@/components/UsageScriptModal";
 import { copilotByokApi, copilotCliApi, settingsApi } from "@/lib/api";
 import type {
@@ -100,6 +101,21 @@ function targetTitle(
   const edition = target.editionName ?? appLabel;
   const profile = target.isDefault ? defaultLabel : target.profileName;
   return `${edition} · ${profile}`;
+}
+
+function groupToUsageProvider(group: CopilotByokGroup): Provider {
+  const { usageScript: _, ...settingsConfig } = group;
+  return {
+    id: group.id,
+    name: group.name,
+    settingsConfig,
+    websiteUrl: group.websiteUrl ?? undefined,
+    category: group.category ?? undefined,
+    notes: group.notes ?? undefined,
+    icon: group.icon ?? undefined,
+    iconColor: group.iconColor ?? undefined,
+    meta: group.usageScript ? { usage_script: group.usageScript } : undefined,
+  };
 }
 
 interface SortableCopilotGroupCardProps {
@@ -161,6 +177,8 @@ function SortableCopilotGroupCard({
     group.websiteUrl?.trim() || (!group.notes?.trim() ? group.url : null);
   const isCli = appId === "copilot-cli";
   const isOfficial = isCli && group.category === "official";
+  const usageProvider = useMemo(() => groupToUsageProvider(group), [group]);
+  const usageEnabled = group.usageScript?.enabled ?? false;
 
   return (
     <div
@@ -246,65 +264,76 @@ function SortableCopilotGroupCard({
           </div>
         </div>
 
-        <div className="pointer-events-none ml-auto flex flex-shrink-0 items-center gap-1.5 opacity-0 transition-opacity duration-200 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
-          {isOfficial ? (
-            <>
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={onConfigureUsage}
-                title={t("provider.configureUsage")}
-                aria-label={t("provider.configureUsage")}
-                className="h-8 w-8 p-1"
-              >
-                <BarChart3 className="h-4 w-4" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={onOpenTerminal}
-                title={t("provider.openTerminal")}
-                aria-label={t("provider.openTerminal")}
-                className="h-8 w-8 p-1 hover:text-emerald-600 dark:hover:text-emerald-400"
-              >
-                <Terminal className="h-4 w-4" />
-              </Button>
-              {!active && (
+        <div className="ml-auto flex flex-shrink-0 items-center gap-2">
+          <UsageFooter
+            provider={usageProvider}
+            providerId={group.id}
+            appId={appId}
+            usageEnabled={usageEnabled}
+            isCurrent={isCli ? selected : group.enabled}
+            isInConfig={!isCli && group.enabled}
+            inline
+          />
+          <div className="pointer-events-none flex flex-shrink-0 items-center gap-1.5 opacity-0 transition-opacity duration-200 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
+            {isOfficial ? (
+              <>
                 <Button
-                  size="sm"
-                  variant="default"
-                  onClick={onSelect}
-                  disabled={disabled}
-                  className="w-[4.5rem] px-2.5"
+                  size="icon"
+                  variant="ghost"
+                  onClick={onConfigureUsage}
+                  title={t("provider.configureUsage")}
+                  aria-label={t("provider.configureUsage")}
+                  className="h-8 w-8 p-1"
                 >
-                  {switching ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Play className="h-4 w-4" />
-                  )}
-                  {t("provider.enable")}
+                  <BarChart3 className="h-4 w-4" />
                 </Button>
-              )}
-            </>
-          ) : (
-            <ProviderActions
-              appId={appId}
-              isCurrent={active}
-              isInConfig={group.enabled}
-              isTesting={testing}
-              onSwitch={isCli ? onSelect : onEnable}
-              onRemoveFromConfig={isCli ? undefined : onDisable}
-              onEdit={onEdit}
-              onDuplicate={onDuplicate}
-              onTest={onTest}
-              onConfigureUsage={onConfigureUsage}
-              onOpenTerminal={isCli ? onOpenTerminal : undefined}
-              onDelete={onDelete}
-              isRemovalProtected={selected}
-              isDeletionProtected={selected}
-              hideMainActionWhenCurrent={isCli}
-            />
-          )}
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={onOpenTerminal}
+                  title={t("provider.openTerminal")}
+                  aria-label={t("provider.openTerminal")}
+                  className="h-8 w-8 p-1 hover:text-emerald-600 dark:hover:text-emerald-400"
+                >
+                  <Terminal className="h-4 w-4" />
+                </Button>
+                {!active && (
+                  <Button
+                    size="sm"
+                    variant="default"
+                    onClick={onSelect}
+                    disabled={disabled}
+                    className="w-[4.5rem] px-2.5"
+                  >
+                    {switching ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Play className="h-4 w-4" />
+                    )}
+                    {t("provider.enable")}
+                  </Button>
+                )}
+              </>
+            ) : (
+              <ProviderActions
+                appId={appId}
+                isCurrent={active}
+                isInConfig={group.enabled}
+                isTesting={testing}
+                onSwitch={isCli ? onSelect : onEnable}
+                onRemoveFromConfig={isCli ? undefined : onDisable}
+                onEdit={onEdit}
+                onDuplicate={onDuplicate}
+                onTest={onTest}
+                onConfigureUsage={onConfigureUsage}
+                onOpenTerminal={isCli ? onOpenTerminal : undefined}
+                onDelete={onDelete}
+                isRemovalProtected={selected}
+                isDeletionProtected={selected}
+                hideMainActionWhenCurrent={isCli}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -483,20 +512,7 @@ export const CopilotByokSettings = forwardRef<
 
   const usageProvider = useMemo<Provider | null>(() => {
     if (!usageGroup) return null;
-    const { usageScript: _, ...settingsConfig } = usageGroup;
-    return {
-      id: usageGroup.id,
-      name: usageGroup.name,
-      settingsConfig,
-      websiteUrl: usageGroup.websiteUrl ?? undefined,
-      category: usageGroup.category ?? undefined,
-      notes: usageGroup.notes ?? undefined,
-      icon: usageGroup.icon ?? undefined,
-      iconColor: usageGroup.iconColor ?? undefined,
-      meta: usageGroup.usageScript
-        ? { usage_script: usageGroup.usageScript }
-        : undefined,
-    };
+    return groupToUsageProvider(usageGroup);
   }, [usageGroup]);
 
   const importTarget = useMemo(() => {
