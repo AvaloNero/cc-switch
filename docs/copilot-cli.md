@@ -4,7 +4,7 @@
 
 CC Switch exposes GitHub Copilot CLI as an application independent from VS Code Copilot. It has its own app-switcher entry, visibility setting, official GitHub Copilot glyph (`githubcopilot`), provider catalog, active provider, sessions, and usage filter. Editing or deleting a provider in one Copilot application does not modify the other application's catalog.
 
-The portable provider catalog uses the `copilot-cli-catalog` provider namespace and participates in the normal database export, WebDAV, and S3 synchronization flows. Each provider defines exactly one default model. This constraint applies only to Copilot CLI; VS Code Copilot continues to use the separate `copilot-byok-catalog` namespace and supports multiple models under one provider. The active provider/default model and the original environment snapshot are device state in `copilot-byok.json`, because environment restoration is specific to the machine.
+The portable provider catalog uses the `copilot-cli-catalog` provider namespace and participates in the normal database export, WebDAV, and S3 synchronization flows. The catalog always contains a protected **GitHub Copilot Official** provider (`copilot-cli-official`) with `category: official`: it cannot be edited or deleted, but it can be moved like every other provider. Each custom provider defines exactly one default model. This constraint applies only to Copilot CLI; VS Code Copilot continues to use the separate `copilot-byok-catalog` namespace and supports multiple models under one provider. The active custom provider/default model and last applied environment are device state in `copilot-byok.json`, because environment changes are specific to the machine.
 
 ## Provider switching
 
@@ -20,11 +20,11 @@ CC Switch manages the provider variables supported by Copilot CLI:
 - `COPILOT_MODEL`, `COPILOT_PROVIDER_MODEL_ID`, and `COPILOT_PROVIDER_WIRE_MODEL`
 - `COPILOT_PROVIDER_MAX_PROMPT_TOKENS` and `COPILOT_PROVIDER_MAX_OUTPUT_TOKENS`
 
-The provider editor follows the provider-switching model used by the CLI applications in CC Switch: a Copilot CLI provider has one default model, and activating the provider applies that model directly. There is no independent model selector and no VS Code-style multi-model list. The backend rejects CLI provider records containing zero or multiple models. Existing multi-model CLI records are migrated once by retaining the active model for the active provider and the first enabled model for every other provider.
+The provider editor follows the provider-switching model used by the CLI applications in CC Switch: a Copilot CLI provider has one default model, and activating the provider applies that model directly. There is no independent model selector and no VS Code-style multi-model list. The backend rejects CLI provider records containing zero or multiple models. Existing multi-model CLI records are migrated once by retaining the active model for the active provider and the first enabled model for every other provider. The Windows tray exposes the same independent provider list and refreshes immediately after a switch made from either the tray or the main window.
 
 The editor also validates protocol combinations before saving. Anthropic uses the Messages API. WebSocket transport is only accepted with the Responses API. Azure endpoints are reduced to their resource host, while terminal paths such as `/responses`, `/chat/completions`, and `/v1/messages` are removed for other provider types.
 
-Activating a provider writes its connection and default model to the user environment, so typing `copilot` in a newly opened terminal uses it directly; no wrapper executable or alias is required. Existing processes keep their inherited environment and must be restarted.
+Activating a provider writes its connection and default model to the user environment, so typing `copilot` in a newly opened terminal uses it directly; no wrapper executable or alias is required. Existing processes keep their inherited environment and must be restarted. Each CLI provider row also has **Open Terminal**: after choosing a working directory, CC Switch starts `copilot` with a process-scoped copy of that provider's configuration. This launch path does not change the persistent selection or user environment. Provider values are shell-quoted on Unix and carried in an encoded PowerShell command on Windows; generated Unix launch scripts use user-only permissions.
 
 ### Windows
 
@@ -41,7 +41,7 @@ Values are stored in private files:
 
 CC Switch adds a bounded, reversible source block to `.profile`, `.bashrc`, and `.zshrc`, as well as existing `.bash_profile`, `.bash_login`, or `.zprofile` files. Fish uses `~/.config/fish/conf.d/cc-switch-copilot.fish`. The managed environment files are written with user-only permissions on Unix.
 
-On every platform, the first apply snapshots the original managed variables. Selecting the **GitHub Copilot Official** provider row restores that snapshot and returns the CLI to its built-in authentication and model routing. Before switching or restoring, CC Switch compares live values and managed shell artifacts with its last successful write; external edits cause a conflict instead of being overwritten. Environment, state, and shell-hook updates are rollback-protected.
+On every platform, an existing complete Copilot CLI environment is imported once as a normal provider, including its endpoint, credentials, routing, headers, and token limits. The imported provider then follows the same edit, switch, terminal-launch, backup, and synchronization paths as every other custom provider; there is no separate “restore previous environment” state. Selecting **GitHub Copilot Official** explicitly removes every managed `COPILOT_PROVIDER_*` and model override and returns the CLI to its built-in GitHub authentication and model routing. If later unmanaged overrides cannot be represented as a provider, the main window requires explicit confirmation before clearing them and the tray leaves Official disabled until that confirmation is made. Before switching away from a CC Switch-managed custom provider, CC Switch compares live values and managed shell artifacts with its last successful write; external edits cause a conflict instead of being overwritten. Environment, state, broadcast, and shell-hook updates are rollback-protected.
 
 VS Code SecretStorage references such as `${input:provider-key}` cannot be resolved by Copilot CLI and are rejected. Provider credentials are stored in the CC Switch database and may be included in configured backups or cloud sync. Applied credentials are also present in the user environment or private shell files and are inherited by newly started processes.
 
@@ -61,6 +61,8 @@ MCP updates preserve unrelated top-level fields and use atomic private writes be
 Copilot CLI does not support VS Code-style Prompt Files. The shared CC Switch editor is therefore labeled **Custom Instructions** for this application and composes the selected content into `copilot-instructions.md`.
 
 ## Usage statistics
+
+Both the VS Code Copilot and Copilot CLI provider cards expose **Configure usage query**. Scripts are stored in provider metadata in their independent `copilot-byok-catalog` and `copilot-cli-catalog` namespaces; endpoint and API-key fallbacks come from that provider's `url` and `apiKey`. The protected CLI Official row can also retain its own query configuration. Usage metadata is not written to VS Code model files or Copilot CLI environment variables.
 
 Usage is reconstructed from the latest cumulative `session.shutdown.modelMetrics` snapshot in each session. Input, output, cache-read, and cache-write tokens are upserted under stable session/model request IDs, so resuming or rescanning a session replaces the previous totals instead of double-counting them. Active sessions without a shutdown snapshot are skipped until a complete cumulative snapshot exists.
 
@@ -96,4 +98,4 @@ cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml copilot_cli --lib
 ```
 
-Also verify provider switching in a newly opened CMD/PowerShell, Bash/Zsh, and Fish process; original-environment restoration; external-edit conflict handling; MCP field preservation; custom-instructions and Skills paths; session resume/delete; and idempotent usage re-import.
+Also verify provider switching in a newly opened CMD/PowerShell, Bash/Zsh, and Fish process; official-provider variable clearing; external-edit conflict handling; MCP field preservation; custom-instructions and Skills paths; session resume/delete; and idempotent usage re-import.

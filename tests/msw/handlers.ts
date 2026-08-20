@@ -79,6 +79,7 @@ export const handlers = [
         selectedModelName: null,
         environmentMatches: false,
         environmentConflicts: [],
+        officialActivationRequiresConfirmation: false,
       },
     }),
   ),

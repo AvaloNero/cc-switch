@@ -378,6 +378,15 @@ pub struct CopilotByokGroup {
     pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_color: Option<String>,
+    /// Provider classification used by first-class catalog entries. Custom
+    /// providers normally use `custom`; the fixed Copilot CLI fallback uses
+    /// `official`, matching the main provider catalog convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// Optional usage-query configuration. It is stored in the provider row's
+    /// metadata and never projected into VS Code or Copilot CLI runtime files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_script: Option<crate::provider::UsageScript>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -475,6 +484,11 @@ impl CopilotByokGroup {
             .icon_color
             .take()
             .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        self.category = self
+            .category
+            .take()
+            .map(|value| value.trim().to_ascii_lowercase())
             .filter(|value| !value.is_empty());
         self.request_headers = std::mem::take(&mut self.request_headers)
             .into_iter()
@@ -661,6 +675,8 @@ mod tests {
             notes: None,
             icon: None,
             icon_color: None,
+            category: None,
+            usage_script: None,
             enabled: true,
             request_headers: BTreeMap::new(),
             models: vec![model("kimi-k3", "Kimi K3"), model("kimi-k2", "Kimi K2")],

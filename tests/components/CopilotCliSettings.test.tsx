@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   deleteGroup: vi.fn(),
   reorderGroups: vi.fn(),
   checkConnection: vi.fn(),
+  updateUsageScript: vi.fn(),
+  openTerminal: vi.fn(),
+  pickDirectory: vi.fn(),
   vscodeGetState: vi.fn(),
 }));
 
@@ -29,10 +32,33 @@ vi.mock("@/lib/api", () => ({
     deleteGroup: mocks.deleteGroup,
     reorderGroups: mocks.reorderGroups,
     checkConnection: mocks.checkConnection,
+    updateUsageScript: mocks.updateUsageScript,
+    openTerminal: mocks.openTerminal,
   },
   copilotByokApi: {
     getState: mocks.vscodeGetState,
   },
+  settingsApi: {
+    pickDirectory: mocks.pickDirectory,
+  },
+}));
+
+vi.mock("@/components/UsageScriptModal", () => ({
+  default: ({ provider, isOpen, onSave }: any) =>
+    isOpen ? (
+      <button
+        type="button"
+        onClick={() =>
+          onSave({
+            enabled: true,
+            language: "javascript",
+            code: "return { remaining: 1 };",
+          })
+        }
+      >
+        保存 {provider.name} 用量
+      </button>
+    ) : null,
 }));
 
 vi.mock("sonner", () => ({
@@ -54,6 +80,9 @@ vi.mock("react-i18next", () => ({
         "copilotByok.cli.defaultModel": "默认模型",
         "copilotByok.cli.apply": "应用到 Copilot CLI",
         "copilotByok.cli.disable": "恢复原环境",
+        "copilotByok.cli.officialConfirmTitle": "清除未受管理的覆盖值？",
+        "copilotByok.cli.officialConfirm": "将清除以下覆盖值",
+        "copilotByok.cli.officialConfirmAction": "清除并使用官方供应商",
         "copilotByok.cli.active": "已生效",
         "copilotByok.cli.inactive": "未配置",
         "copilotByok.cli.needsApply": "需要重新应用",
@@ -67,6 +96,11 @@ vi.mock("react-i18next", () => ({
         "provider.duplicate": "复制",
         "provider.connectivityCheck": "检测连通",
         "provider.configureUsage": "配置用量查询",
+        "provider.openTerminal": "打开终端",
+        "provider.terminalOpened": "终端已打开",
+        "provider.terminalOpenFailed": "打开终端失败",
+        "provider.usageSaved": "用量查询配置已保存",
+        "provider.usageSaveFailed": "用量查询配置保存失败",
         "common.refresh": "刷新",
         "common.edit": "编辑",
         "common.delete": "删除",
@@ -112,9 +146,24 @@ const group: CopilotByokGroup = {
   ],
 };
 
+const officialGroup: CopilotByokGroup = {
+  id: "copilot-cli-official",
+  name: "GitHub Copilot Official",
+  url: "",
+  apiKey: "",
+  apiType: "chat-completions",
+  websiteUrl: "https://github.com/features/copilot",
+  icon: "githubcopilot",
+  category: "official",
+  enabled: true,
+  requestHeaders: {},
+  extra: {},
+  models: [],
+};
+
 function cliState(active: boolean): CopilotByokState {
   return {
-    groups: [group],
+    groups: [officialGroup, group],
     targets: [],
     selectedTargetIds: [],
     managedModelCount: 1,
@@ -125,8 +174,9 @@ function cliState(active: boolean): CopilotByokState {
       selectedModelId: active ? group.models[0].id : null,
       selectedProviderName: active ? group.name : null,
       selectedModelName: active ? group.models[0].name : null,
-      environmentMatches: active,
+      environmentMatches: true,
       environmentConflicts: [],
+      officialActivationRequiresConfirmation: false,
     },
   };
 }
@@ -140,6 +190,9 @@ describe("CopilotCliSettings", () => {
     mocks.deleteGroup.mockReset();
     mocks.reorderGroups.mockReset();
     mocks.checkConnection.mockReset();
+    mocks.updateUsageScript.mockReset();
+    mocks.openTerminal.mockReset();
+    mocks.pickDirectory.mockReset();
     mocks.vscodeGetState.mockReset();
 
     mocks.cliGetState.mockResolvedValue(cliState(false));
@@ -148,6 +201,9 @@ describe("CopilotCliSettings", () => {
     mocks.upsertGroup.mockResolvedValue(cliState(false));
     mocks.deleteGroup.mockResolvedValue(cliState(false));
     mocks.reorderGroups.mockResolvedValue(cliState(false));
+    mocks.updateUsageScript.mockResolvedValue(cliState(false));
+    mocks.openTerminal.mockResolvedValue(true);
+    mocks.pickDirectory.mockResolvedValue("C:\\Work");
   });
 
   it("shows a compact provider list and switches the provider directly", async () => {
@@ -171,13 +227,20 @@ describe("CopilotCliSettings", () => {
     expect(mocks.vscodeGetState).not.toHaveBeenCalled();
   });
 
-  it("marks the active provider and switches back through the official provider row", async () => {
+  it("uses only the blue card highlight for the active provider and switches through Official", async () => {
     mocks.cliGetState.mockResolvedValue(cliState(true));
     render(<CopilotCliSettings />);
 
+    const activeProvider = await screen.findByRole("group", {
+      name: "CLI Provider",
+    });
+    expect(activeProvider).toHaveClass("border-blue-500/60");
     expect(
-      await screen.findByRole("button", { name: "使用中" }),
-    ).toBeDisabled();
+      within(activeProvider).queryByText("使用中"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(activeProvider).queryByRole("button", { name: "使用中" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除" })).toBeDisabled();
 
     const officialProvider = screen.getByRole("group", {
@@ -186,6 +249,85 @@ describe("CopilotCliSettings", () => {
     fireEvent.click(
       within(officialProvider).getByRole("button", { name: "启用" }),
     );
-    await waitFor(() => expect(mocks.disable).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(mocks.setSelection).toHaveBeenCalledWith(
+        "copilot-cli-official",
+        "GitHub Copilot Official",
+      ),
+    );
+    expect(mocks.disable).not.toHaveBeenCalled();
+  });
+
+  it("requires confirmation before the official provider clears an unmanaged environment", async () => {
+    const unmanaged = cliState(false);
+    unmanaged.cli.environmentMatches = false;
+    unmanaged.cli.environmentConflicts = [
+      "COPILOT_PROVIDER_BASE_URL",
+      "COPILOT_PROVIDER_API_KEY",
+    ];
+    unmanaged.cli.officialActivationRequiresConfirmation = true;
+    mocks.cliGetState.mockResolvedValue(unmanaged);
+    render(<CopilotCliSettings />);
+
+    const officialProvider = await screen.findByRole("group", {
+      name: "GitHub Copilot Official",
+    });
+    fireEvent.click(
+      within(officialProvider).getByRole("button", { name: "启用" }),
+    );
+
+    expect(mocks.setSelection).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("清除未受管理的覆盖值？"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/COPILOT_PROVIDER_API_KEY/)).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "清除并使用官方供应商" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.setSelection).toHaveBeenCalledWith(
+        "copilot-cli-official",
+        "GitHub Copilot Official",
+        true,
+      ),
+    );
+  });
+
+  it("keeps Official sortable and exposes no previous-environment restore action", async () => {
+    render(<CopilotCliSettings />);
+
+    const officialProvider = await screen.findByRole("group", {
+      name: "GitHub Copilot Official",
+    });
+    expect(
+      within(officialProvider).getByRole("button", { name: "拖拽排序" }),
+    ).toBeEnabled();
+    expect(
+      within(officialProvider).queryByText("恢复之前的环境"),
+    ).not.toBeInTheDocument();
+    expect(mocks.disable).not.toHaveBeenCalled();
+  });
+
+  it("configures usage queries and opens a provider-scoped CLI terminal", async () => {
+    render(<CopilotCliSettings />);
+
+    const provider = await screen.findByRole("group", { name: "CLI Provider" });
+    fireEvent.click(within(provider).getByTitle("配置用量查询"));
+    fireEvent.click(await screen.findByText("保存 CLI Provider 用量"));
+    await waitFor(() =>
+      expect(mocks.updateUsageScript).toHaveBeenCalledWith(
+        "cli-provider",
+        expect.objectContaining({ enabled: true }),
+      ),
+    );
+
+    fireEvent.click(within(provider).getByTitle("打开终端"));
+    await waitFor(() =>
+      expect(mocks.openTerminal).toHaveBeenCalledWith(
+        "cli-provider",
+        "C:\\Work",
+      ),
+    );
   });
 });

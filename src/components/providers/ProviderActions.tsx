@@ -59,6 +59,7 @@ interface ProviderActionsProps {
   isRemovalProtected?: boolean;
   isDeletionProtected?: boolean;
   isStateChangeProtected?: boolean;
+  hideMainActionWhenCurrent?: boolean;
   defaultModelOptions?: OpenClawDefaultModelOption[];
   onSetAsDefault?: (modelId?: string) => void;
 }
@@ -102,6 +103,7 @@ export function ProviderActions({
   isRemovalProtected = false,
   isDeletionProtected = false,
   isStateChangeProtected = false,
+  hideMainActionWhenCurrent = false,
   defaultModelOptions = [],
   onSetAsDefault,
 }: ProviderActionsProps) {
@@ -373,24 +375,26 @@ export function ProviderActions({
 
       {/* disabled:pointer-events-none prevents the native title from firing,
           so the wrapper owns the explanatory tooltip and cursor. */}
-      <span
-        title={buttonState.title}
-        className={cn(
-          "inline-flex",
-          buttonState.disabled && "cursor-not-allowed",
-        )}
-      >
-        <Button
-          size="sm"
-          variant={buttonState.variant}
-          onClick={handleMainButtonClick}
-          disabled={buttonState.disabled}
-          className={cn("w-[4.5rem] px-2.5", buttonState.className)}
+      {!(hideMainActionWhenCurrent && isCurrent) && (
+        <span
+          title={buttonState.title}
+          className={cn(
+            "inline-flex",
+            buttonState.disabled && "cursor-not-allowed",
+          )}
         >
-          {buttonState.icon}
-          {buttonState.text}
-        </Button>
-      </span>
+          <Button
+            size="sm"
+            variant={buttonState.variant}
+            onClick={handleMainButtonClick}
+            disabled={buttonState.disabled}
+            className={cn("w-[4.5rem] px-2.5", buttonState.className)}
+          >
+            {buttonState.icon}
+            {buttonState.text}
+          </Button>
+        </span>
+      )}
 
       <div className="flex items-center gap-1">
         <Button

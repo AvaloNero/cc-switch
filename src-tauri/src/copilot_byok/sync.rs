@@ -584,6 +584,8 @@ mod tests {
             notes: None,
             icon: None,
             icon_color: None,
+            category: None,
+            usage_script: None,
             enabled: true,
             request_headers: BTreeMap::new(),
             models: ["kimi-k2", "kimi-k3"]

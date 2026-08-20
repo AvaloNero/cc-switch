@@ -306,6 +306,8 @@ fn parse_group(target_id: &str, value: &Value) -> Result<CopilotByokGroup, Strin
         notes: None,
         icon: None,
         icon_color: None,
+        category: None,
+        usage_script: None,
         enabled: true,
         request_headers: shared_headers.unwrap_or_default(),
         models,
@@ -337,6 +339,7 @@ fn equivalent_group(left: &CopilotByokGroup, right: &CopilotByokGroup) -> bool {
         group.notes = None;
         group.icon = None;
         group.icon_color = None;
+        group.usage_script = None;
         for model in &mut group.models {
             model.id.clear();
         }

@@ -8,7 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const STORE_FILE: &str = "copilot-byok.json";
-const STORE_VERSION: u32 = 8;
+const STORE_VERSION: u32 = 10;
+const GROUPED_STORE_VERSION: u64 = 3;
 const MAX_TARGETS: usize = 64;
 const MAX_GROUPS: usize = 256;
 const MAX_MODELS: usize = 256;
@@ -45,12 +46,12 @@ pub struct CopilotByokCustomTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CopilotCliManagedEnvironment {
-    /// Values that existed before CC Switch first enabled CLI management.
-    /// `None` means the variable was absent and must be removed on restore.
+    /// Legacy pre-management values retained only until the v10 provider
+    /// import migration has converted them into a normal catalog entry.
     #[serde(default)]
     pub original: BTreeMap<String, Option<String>>,
-    /// Last values written by CC Switch. These are compared before a switch or
-    /// restore so an external edit is never overwritten silently.
+    /// Last values written by CC Switch. These are compared before a switch so
+    /// an external edit is never overwritten silently.
     #[serde(default)]
     pub last_written: BTreeMap<String, Option<String>>,
 }
@@ -60,6 +61,10 @@ pub struct CopilotCliManagedEnvironment {
 pub struct CopilotCliConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Legacy v9 marker. v10 imports the retained environment as a normal
+    /// provider and clears this flag.
+    #[serde(default)]
+    pub official_override_active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_group_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -106,6 +111,10 @@ pub struct CopilotByokStore {
     /// multi-model CLI catalog to one default model per provider.
     #[serde(default)]
     pub cli_single_model_catalog_initialized: bool,
+    /// One-time migration marker for importing an environment that predates
+    /// CC Switch management as a normal Copilot CLI provider.
+    #[serde(default)]
+    pub cli_environment_import_initialized: bool,
 }
 
 impl Default for CopilotByokStore {
@@ -119,6 +128,7 @@ impl Default for CopilotByokStore {
             cli: CopilotCliConfig::default(),
             cli_catalog_initialized: false,
             cli_single_model_catalog_initialized: false,
+            cli_environment_import_initialized: false,
         }
     }
 }
@@ -201,6 +211,8 @@ impl LegacyModel {
             notes: None,
             icon: None,
             icon_color: None,
+            category: None,
+            usage_script: None,
             enabled: self.enabled,
             request_headers: self.request_headers,
             models: vec![CopilotByokModel {
@@ -351,7 +363,14 @@ pub(crate) fn normalize_store(store: &mut CopilotByokStore) -> Result<(), AppErr
     if !store.cli.enabled {
         store.cli.selected_group_id = None;
         store.cli.selected_model_id = None;
-        store.cli.managed_environment = CopilotCliManagedEnvironment::default();
+        if !store.cli.official_override_active {
+            store.cli.managed_environment = CopilotCliManagedEnvironment::default();
+        }
+    } else {
+        // A custom provider and the official-clear state are mutually
+        // exclusive. Older or partially written stores prefer the concrete
+        // custom selection when `enabled` is true.
+        store.cli.official_override_active = false;
     }
 
     let mut selected = HashSet::new();
@@ -499,6 +518,7 @@ fn migrate_v4_flattened_extras(value: &mut Value) {
                 "notes",
                 "icon",
                 "iconColor",
+                "category",
                 "enabled",
                 "requestHeaders",
                 "models",
@@ -512,7 +532,7 @@ pub(crate) fn parse_store_value(mut value: Value) -> Result<CopilotByokStore, Ap
     if version < u64::from(STORE_VERSION) && value.get("groups").is_some() {
         migrate_v4_flattened_extras(&mut value);
     }
-    let mut store = if value.get("groups").is_some() || version >= u64::from(STORE_VERSION) {
+    let mut store = if value.get("groups").is_some() || version >= GROUPED_STORE_VERSION {
         serde_json::from_value(value).map_err(|error| {
             AppError::Config(format!("Failed to parse Copilot BYOK store: {error}"))
         })?
@@ -753,6 +773,38 @@ mod tests {
     }
 
     #[test]
+    fn v9_store_without_serialized_groups_retains_cli_environment_for_v10_import() {
+        let store = parse_store_value(json!({
+            "version": 9,
+            "targetsInitialized": false,
+            "selectedTargetIds": [],
+            "customTargets": [],
+            "cli": {
+                "enabled": false,
+                "officialOverrideActive": true,
+                "managedEnvironment": {
+                    "original": {
+                        "COPILOT_PROVIDER_BASE_URL": "https://api.example.com/v1",
+                        "COPILOT_MODEL": "model-1"
+                    },
+                    "lastWritten": {}
+                }
+            },
+            "cliCatalogInitialized": true,
+            "cliSingleModelCatalogInitialized": true
+        }))
+        .expect("parse v9 store without groups field");
+
+        assert_eq!(store.version, STORE_VERSION);
+        assert!(store.cli.official_override_active);
+        assert_eq!(
+            store.cli.managed_environment.original["COPILOT_MODEL"].as_deref(),
+            Some("model-1")
+        );
+        assert!(!store.cli_environment_import_initialized);
+    }
+
+    #[test]
     fn default_store_does_not_manage_any_target() {
         let store = CopilotByokStore::default();
         assert!(!store.targets_initialized);
@@ -818,6 +870,8 @@ mod tests {
                 notes: None,
                 icon: None,
                 icon_color: None,
+                category: None,
+                usage_script: None,
                 enabled: true,
                 request_headers: BTreeMap::new(),
                 models: Vec::new(),
@@ -833,6 +887,8 @@ mod tests {
                 notes: None,
                 icon: None,
                 icon_color: None,
+                category: None,
+                usage_script: None,
                 enabled: true,
                 request_headers: BTreeMap::new(),
                 models: Vec::new(),

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { UsageScript } from "@/types";
 import type { StreamCheckResult } from "./connectivity-check";
 
 export type CopilotByokApiType = "chat-completions" | "responses" | "messages";
@@ -41,6 +42,8 @@ export interface CopilotByokGroup {
   notes?: string | null;
   icon?: string | null;
   iconColor?: string | null;
+  category?: "official" | "custom" | null;
+  usageScript?: UsageScript | null;
   enabled: boolean;
   requestHeaders: Record<string, string>;
   models: CopilotByokModel[];
@@ -74,6 +77,7 @@ export interface CopilotCliState {
   selectedModelName: string | null;
   environmentMatches: boolean;
   environmentConflicts: string[];
+  officialActivationRequiresConfirmation: boolean;
 }
 
 export interface CopilotByokState {
@@ -175,6 +179,16 @@ export const copilotByokApi = {
       groupId,
     });
   },
+
+  updateUsageScript(
+    groupId: string,
+    usageScript: UsageScript,
+  ): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_byok_update_usage_script", {
+      groupId,
+      usageScript,
+    });
+  },
 };
 
 /** Independent first-class GitHub Copilot CLI provider catalog and switcher. */
@@ -183,10 +197,15 @@ export const copilotCliApi = {
     return invoke<CopilotByokState>("copilot_cli_get_state");
   },
 
-  setSelection(groupId: string, groupName: string): Promise<CopilotByokState> {
+  setSelection(
+    groupId: string,
+    groupName: string,
+    confirmUnmanagedClear = false,
+  ): Promise<CopilotByokState> {
     return invoke<CopilotByokState>("copilot_cli_set_selection", {
       groupId,
       groupName,
+      confirmUnmanagedClear,
     });
   },
 
@@ -210,5 +229,19 @@ export const copilotCliApi = {
     return invoke<StreamCheckResult>("copilot_cli_check_connection", {
       groupId,
     });
+  },
+
+  updateUsageScript(
+    groupId: string,
+    usageScript: UsageScript,
+  ): Promise<CopilotByokState> {
+    return invoke<CopilotByokState>("copilot_cli_update_usage_script", {
+      groupId,
+      usageScript,
+    });
+  },
+
+  openTerminal(groupId: string, cwd: string): Promise<boolean> {
+    return invoke<boolean>("copilot_cli_open_terminal", { groupId, cwd });
   },
 };

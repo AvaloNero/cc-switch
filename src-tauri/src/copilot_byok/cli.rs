@@ -4,6 +4,7 @@ use super::store::CopilotByokStore;
 use super::store::{CopilotCliConfig, CopilotCliManagedEnvironment};
 use crate::error::AppError;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 #[cfg(any(unix, test))]
 use std::fs;
@@ -30,6 +31,7 @@ const CLI_PROVIDER_TYPE_KEY: &str = "ccSwitchCopilotCliProviderType";
 const CLI_BEARER_TOKEN_KEY: &str = "ccSwitchCopilotCliBearerToken";
 const CLI_TRANSPORT_KEY: &str = "ccSwitchCopilotCliTransport";
 const CLI_AZURE_API_VERSION_KEY: &str = "ccSwitchCopilotCliAzureApiVersion";
+const CLI_MODEL_KEY: &str = "ccSwitchCopilotCliModel";
 const CLI_MODEL_ID_KEY: &str = "ccSwitchCopilotCliModelId";
 const CLI_WIRE_MODEL_KEY: &str = "ccSwitchCopilotCliWireModel";
 
@@ -45,6 +47,9 @@ pub struct CopilotCliState {
     pub environment_matches: bool,
     /// Variable names only. Secret values are never returned to the frontend.
     pub environment_conflicts: Vec<String>,
+    /// Selecting the official provider would remove overrides that CC Switch
+    /// does not currently own, so the frontend must obtain explicit consent.
+    pub official_activation_requires_confirmation: bool,
 }
 
 trait UserEnvironment {
@@ -238,6 +243,11 @@ impl UnixUserEnvironment {
         let mut conflicts = Vec::new();
         let enabled = expected.values().any(Option::is_some);
         if enabled {
+            if read_optional_regular_file(&self.env_path(), "Copilot CLI environment")?.as_deref()
+                != Some(render_posix_env(expected)?.as_str())
+            {
+                conflicts.push(self.env_path().to_string_lossy().to_string());
+            }
             if read_optional_regular_file(&self.fish_env_path(), "Copilot CLI fish environment")?
                 .as_deref()
                 != Some(render_fish_env(expected)?.as_str())
@@ -247,12 +257,35 @@ impl UnixUserEnvironment {
             for path in self.profile_paths() {
                 let content =
                     read_optional_regular_file(&path, "shell profile")?.unwrap_or_default();
-                if managed_block_state(&content)? != ManagedBlockState::Exact {
+                if !matches!(managed_block_state(&content), Ok(ManagedBlockState::Exact)) {
                     conflicts.push(path.to_string_lossy().to_string());
                 }
             }
             let fish_hook = read_optional_regular_file(&self.fish_hook_path(), "fish hook")?;
             if fish_hook.as_deref() != Some(fish_hook_contents().as_str()) {
+                conflicts.push(self.fish_hook_path().to_string_lossy().to_string());
+            }
+        } else {
+            if read_optional_regular_file(&self.env_path(), "Copilot CLI environment")?.is_some() {
+                conflicts.push(self.env_path().to_string_lossy().to_string());
+            }
+            if read_optional_regular_file(&self.fish_env_path(), "Copilot CLI fish environment")?
+                .is_some()
+            {
+                conflicts.push(self.fish_env_path().to_string_lossy().to_string());
+            }
+            for path in self.profile_paths() {
+                let Some(content) = read_optional_regular_file(&path, "shell profile")? else {
+                    continue;
+                };
+                if !matches!(
+                    managed_block_state(&content),
+                    Ok(ManagedBlockState::Missing)
+                ) {
+                    conflicts.push(path.to_string_lossy().to_string());
+                }
+            }
+            if read_optional_regular_file(&self.fish_hook_path(), "fish hook")?.is_some() {
                 conflicts.push(self.fish_hook_path().to_string_lossy().to_string());
             }
         }
@@ -266,7 +299,9 @@ impl UnixUserEnvironment {
         for path in self.profile_paths() {
             let content = read_optional_regular_file(&path, "shell profile")?.unwrap_or_default();
             let updated = update_managed_block(&content, enabled)?;
-            updates.push(FileUpdate::write(path, updated.into_bytes()));
+            if updated != content {
+                updates.push(FileUpdate::write(path, updated.into_bytes()));
+            }
         }
         let fish_hook_path = self.fish_hook_path();
         if enabled {
@@ -701,8 +736,9 @@ fn desired_environment(
         format_headers(group)?,
     );
     let model_id = extra_string(&model.extra, CLI_MODEL_ID_KEY).unwrap_or(&model.model_id);
+    let copilot_model = extra_string(&model.extra, CLI_MODEL_KEY).unwrap_or(model_id);
     let wire_model = extra_string(&model.extra, CLI_WIRE_MODEL_KEY).unwrap_or(&model.model_id);
-    desired.insert("COPILOT_MODEL".to_string(), Some(model_id.to_string()));
+    desired.insert("COPILOT_MODEL".to_string(), Some(copilot_model.to_string()));
     desired.insert(
         "COPILOT_PROVIDER_MODEL_ID".to_string(),
         Some(model_id.to_string()),
@@ -729,6 +765,241 @@ fn snapshot(
         .iter()
         .map(|name| Ok(((*name).to_string(), environment.read(name)?)))
         .collect()
+}
+
+pub(super) fn official_environment() -> BTreeMap<String, Option<String>> {
+    MANAGED_VARIABLES
+        .iter()
+        .map(|name| ((*name).to_string(), None))
+        .collect()
+}
+
+pub(super) fn current_environment() -> Result<BTreeMap<String, Option<String>>, AppError> {
+    #[cfg(windows)]
+    {
+        snapshot(&WindowsUserEnvironment)
+    }
+    #[cfg(unix)]
+    {
+        snapshot(&UnixUserEnvironment::new()?)
+    }
+}
+
+fn environment_value<'a>(
+    values: &'a BTreeMap<String, Option<String>>,
+    name: &str,
+) -> Option<&'a str> {
+    values
+        .get(name)
+        .and_then(Option::as_deref)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn environment_token_limit(
+    values: &BTreeMap<String, Option<String>>,
+    name: &str,
+) -> Result<Option<u64>, AppError> {
+    environment_value(values, name)
+        .map(|value| {
+            value.parse::<u64>().map_err(|error| {
+                AppError::InvalidInput(format!(
+                    "Cannot import existing Copilot CLI environment variable {name}: {error}"
+                ))
+            })
+        })
+        .transpose()
+}
+
+fn environment_headers(
+    values: &BTreeMap<String, Option<String>>,
+) -> Result<BTreeMap<String, String>, AppError> {
+    let Some(raw) = environment_value(values, "COPILOT_PROVIDER_HEADERS") else {
+        return Ok(BTreeMap::new());
+    };
+    raw.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (name, value) = line.split_once(':').ok_or_else(|| {
+                AppError::InvalidInput(
+                    "Cannot import COPILOT_PROVIDER_HEADERS: each line must contain a colon"
+                        .to_string(),
+                )
+            })?;
+            Ok((name.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Convert an environment that predates CC Switch management into the same
+/// one-provider/one-model shape used by the first-class Copilot CLI catalog.
+/// The stable id makes an interrupted migration safe to retry without creating
+/// duplicate secret-bearing provider rows.
+pub(super) fn imported_group_from_environment(
+    values: &BTreeMap<String, Option<String>>,
+    name: &str,
+) -> Result<Option<CopilotByokGroup>, AppError> {
+    if !values.values().any(Option::is_some) {
+        return Ok(None);
+    }
+    let url = environment_value(values, "COPILOT_PROVIDER_BASE_URL").ok_or_else(|| {
+        AppError::InvalidInput(
+            "Cannot import the existing Copilot CLI environment without COPILOT_PROVIDER_BASE_URL"
+                .to_string(),
+        )
+    })?;
+    let copilot_model = environment_value(values, "COPILOT_MODEL")
+        .or_else(|| environment_value(values, "COPILOT_PROVIDER_MODEL_ID"))
+        .or_else(|| environment_value(values, "COPILOT_PROVIDER_WIRE_MODEL"))
+        .ok_or_else(|| {
+            AppError::InvalidInput(
+                "Cannot import the existing Copilot CLI environment without a model id".to_string(),
+            )
+        })?;
+    let provider_type = environment_value(values, "COPILOT_PROVIDER_TYPE")
+        .unwrap_or("openai")
+        .to_ascii_lowercase();
+    let api_type = if provider_type == "anthropic" {
+        "messages"
+    } else {
+        match environment_value(values, "COPILOT_PROVIDER_WIRE_API")
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("responses") => "responses",
+            Some("completions" | "chat-completions") | None => "chat-completions",
+            Some(value) => {
+                return Err(AppError::InvalidInput(format!(
+                    "Cannot import unsupported COPILOT_PROVIDER_WIRE_API value: {value}"
+                )))
+            }
+        }
+    };
+    let provider_model_id =
+        environment_value(values, "COPILOT_PROVIDER_MODEL_ID").unwrap_or(copilot_model);
+    let wire_model =
+        environment_value(values, "COPILOT_PROVIDER_WIRE_MODEL").unwrap_or(provider_model_id);
+
+    let mut digest = Sha256::new();
+    for variable in MANAGED_VARIABLES {
+        digest.update(variable.as_bytes());
+        digest.update([0]);
+        if let Some(value) = values.get(*variable).and_then(Option::as_deref) {
+            digest.update(value.as_bytes());
+        }
+        digest.update([0]);
+    }
+    let encoded = format!("{:x}", digest.finalize());
+    let group_id = format!("copilot-cli-imported-{}", &encoded[..24]);
+    let model_id = format!("{group_id}:model");
+
+    let mut group_extra = BTreeMap::from([(
+        CLI_PROVIDER_TYPE_KEY.to_string(),
+        serde_json::Value::String(provider_type.clone()),
+    )]);
+    for (environment_name, extra_name) in [
+        ("COPILOT_PROVIDER_BEARER_TOKEN", CLI_BEARER_TOKEN_KEY),
+        ("COPILOT_PROVIDER_TRANSPORT", CLI_TRANSPORT_KEY),
+        (
+            "COPILOT_PROVIDER_AZURE_API_VERSION",
+            CLI_AZURE_API_VERSION_KEY,
+        ),
+    ] {
+        if let Some(value) = environment_value(values, environment_name) {
+            group_extra.insert(
+                extra_name.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
+        }
+    }
+    let model_extra = BTreeMap::from([
+        (
+            CLI_MODEL_KEY.to_string(),
+            serde_json::Value::String(copilot_model.to_string()),
+        ),
+        (
+            CLI_MODEL_ID_KEY.to_string(),
+            serde_json::Value::String(provider_model_id.to_string()),
+        ),
+        (
+            CLI_WIRE_MODEL_KEY.to_string(),
+            serde_json::Value::String(wire_model.to_string()),
+        ),
+    ]);
+    let mut group = CopilotByokGroup {
+        id: group_id,
+        name: name.to_string(),
+        url: url.to_string(),
+        api_key: environment_value(values, "COPILOT_PROVIDER_API_KEY")
+            .unwrap_or_default()
+            .to_string(),
+        api_type: api_type.to_string(),
+        website_url: None,
+        notes: Some("Imported from the existing Copilot CLI environment".to_string()),
+        icon: None,
+        icon_color: None,
+        category: None,
+        usage_script: None,
+        enabled: true,
+        request_headers: environment_headers(values)?,
+        models: vec![CopilotByokModel {
+            id: model_id,
+            model_id: provider_model_id.to_string(),
+            name: copilot_model.to_string(),
+            enabled: true,
+            tool_calling: None,
+            vision: None,
+            thinking: None,
+            streaming: None,
+            context_window: None,
+            max_input_tokens: environment_token_limit(
+                values,
+                "COPILOT_PROVIDER_MAX_PROMPT_TOKENS",
+            )?,
+            max_output_tokens: environment_token_limit(
+                values,
+                "COPILOT_PROVIDER_MAX_OUTPUT_TOKENS",
+            )?,
+            edit_tools: Vec::new(),
+            zero_data_retention_enabled: false,
+            supports_reasoning_effort: Vec::new(),
+            reasoning_effort_format: None,
+            model_options: serde_json::json!({}),
+            extra: model_extra,
+        }],
+        extra: group_extra,
+    };
+    group.normalize();
+    group.validate()?;
+    desired_environment(&group, &group.models[0])?;
+    Ok(Some(group))
+}
+
+pub(super) fn launch_environment(
+    group: Option<&CopilotByokGroup>,
+) -> Result<BTreeMap<String, Option<String>>, AppError> {
+    let Some(group) = group else {
+        return Ok(official_environment());
+    };
+    if !group.enabled {
+        return Err(AppError::InvalidInput(format!(
+            "Disabled Copilot CLI provider cannot be launched: {}",
+            group.id
+        )));
+    }
+    let model = group.models.first().ok_or_else(|| {
+        AppError::Config(format!(
+            "Copilot CLI provider {} has no default model",
+            group.id
+        ))
+    })?;
+    if group.models.len() != 1 || !model.enabled {
+        return Err(AppError::Config(format!(
+            "Copilot CLI provider {} must have exactly one enabled default model",
+            group.id
+        )));
+    }
+    desired_environment(group, model)
 }
 
 fn conflicts(
@@ -809,19 +1080,21 @@ fn state_with_backend(
         _ => None,
     };
     let current = snapshot(environment)?;
-    let environment_conflicts = if store.cli.enabled {
-        let mut changed = conflicts(&current, &store.cli.managed_environment.last_written);
-        changed
-            .extend(environment.external_conflicts(&store.cli.managed_environment.last_written)?);
-        changed.sort();
-        changed.dedup();
-        changed
+    let official = official_environment();
+    let expected = if store.cli.enabled {
+        &store.cli.managed_environment.last_written
     } else {
-        Vec::new()
+        &official
     };
+    let mut environment_conflicts = conflicts(&current, expected);
+    environment_conflicts.extend(environment.external_conflicts(expected)?);
+    environment_conflicts.sort();
+    environment_conflicts.dedup();
     let desired_matches_last_written = selected
         .and_then(|(group, model)| desired_environment(group, model).ok())
         .is_some_and(|desired| desired == store.cli.managed_environment.last_written);
+    let official_matches =
+        !store.cli.enabled && current == official && environment_conflicts.is_empty();
     Ok(CopilotCliState {
         supported: true,
         enabled: store.cli.enabled,
@@ -829,11 +1102,13 @@ fn state_with_backend(
         selected_model_id: store.cli.selected_model_id.clone(),
         selected_provider_name: selected.map(|(group, _)| group.name.clone()),
         selected_model_name: selected.map(|(_, model)| model.name.clone()),
-        environment_matches: store.cli.enabled
-            && selected.is_some()
-            && desired_matches_last_written
-            && environment_conflicts.is_empty(),
+        environment_matches: if store.cli.enabled {
+            selected.is_some() && desired_matches_last_written && environment_conflicts.is_empty()
+        } else {
+            official_matches
+        },
         environment_conflicts,
+        official_activation_requires_confirmation: !store.cli.enabled && !official_matches,
     })
 }
 
@@ -842,11 +1117,17 @@ fn ensure_no_external_edits(
     current: &BTreeMap<String, Option<String>>,
     environment: &dyn UserEnvironment,
 ) -> Result<(), AppError> {
-    if !store.cli.enabled {
+    if !store.cli.enabled && !store.cli.official_override_active {
         return Ok(());
     }
-    let mut changed = conflicts(current, &store.cli.managed_environment.last_written);
-    changed.extend(environment.external_conflicts(&store.cli.managed_environment.last_written)?);
+    let official = official_environment();
+    let expected = if store.cli.enabled {
+        &store.cli.managed_environment.last_written
+    } else {
+        &official
+    };
+    let mut changed = conflicts(current, expected);
+    changed.extend(environment.external_conflicts(expected)?);
     changed.sort();
     changed.dedup();
     if changed.is_empty() {
@@ -873,7 +1154,7 @@ where
     let desired = desired_environment(group, model)?;
     let current = snapshot(environment)?;
     ensure_no_external_edits(store, &current, environment)?;
-    let original = if store.cli.enabled {
+    let original = if store.cli.enabled || store.cli.official_override_active {
         store.cli.managed_environment.original.clone()
     } else {
         current.clone()
@@ -883,6 +1164,7 @@ where
     let previous = store.cli.clone();
     store.cli = CopilotCliConfig {
         enabled: true,
+        official_override_active: false,
         selected_group_id: Some(group_id.to_string()),
         selected_model_id: Some(model_id.to_string()),
         managed_environment: CopilotCliManagedEnvironment {
@@ -927,25 +1209,52 @@ fn disable_with_backend<F>(
 where
     F: Fn(&CopilotByokStore) -> Result<(), AppError>,
 {
-    if !store.cli.enabled {
-        return state_with_backend(store, groups, environment);
-    }
+    // Backward-compatible command behavior: disabling now means selecting the
+    // movable Official provider. Previous environments are catalog entries,
+    // not an out-of-band restore state.
+    use_official_with_backend(store, groups, environment, true, persist)
+}
+
+fn use_official_with_backend<F>(
+    store: &mut CopilotByokStore,
+    groups: &[CopilotByokGroup],
+    environment: &dyn UserEnvironment,
+    confirm_unmanaged_clear: bool,
+    persist: F,
+) -> Result<CopilotCliState, AppError>
+where
+    F: Fn(&CopilotByokStore) -> Result<(), AppError>,
+{
     let current = snapshot(environment)?;
-    ensure_no_external_edits(store, &current, environment)?;
-    let original = store.cli.managed_environment.original.clone();
-    let before = write_atomic(environment, &original)?;
+    let desired = official_environment();
+    let was_managed = store.cli.enabled || store.cli.official_override_active;
+    if was_managed {
+        ensure_no_external_edits(store, &current, environment)?;
+    } else {
+        let mut unmanaged = conflicts(&current, &desired);
+        unmanaged.extend(environment.external_conflicts(&desired)?);
+        unmanaged.sort();
+        unmanaged.dedup();
+        if !unmanaged.is_empty() && !confirm_unmanaged_clear {
+            return Err(AppError::Conflict(format!(
+                "Activating GitHub Copilot Official requires confirmation before clearing unmanaged overrides: {}",
+                unmanaged.join(", ")
+            )));
+        }
+    }
+    let before = write_atomic(environment, &desired)?;
     let previous = store.cli.clone();
     store.cli = CopilotCliConfig::default();
     if let Err(error) = persist(store) {
         store.cli = previous;
         restore_snapshot(environment, &before).map_err(|rollback_error| {
             AppError::Config(format!(
-                "{error}; failed to reapply Copilot CLI environment: {rollback_error}"
+                "{error}; failed to roll back GitHub Copilot official environment: {rollback_error}"
             ))
         })?;
         return Err(error);
     }
-    if let Err(error) = environment.broadcast_change(&before, &original) {
+    if let Err(error) = environment.broadcast_change(&before, &desired) {
         store.cli = previous;
         let persist_error = persist(store).err();
         let restore_error = restore_snapshot(environment, &before).err();
@@ -954,10 +1263,10 @@ where
             details.push(format!("failed to restore selection: {error}"));
         }
         if let Some(error) = restore_error {
-            details.push(format!("failed to reapply environment: {error}"));
+            details.push(format!("failed to restore environment: {error}"));
         }
         return Err(AppError::Config(format!(
-            "Failed to remove Copilot CLI shell integration: {}",
+            "Failed to activate GitHub Copilot official provider: {}",
             details.join("; ")
         )));
     }
@@ -1032,6 +1341,33 @@ pub(super) fn disable(
     }
 }
 
+pub(super) fn use_official(
+    store: &mut CopilotByokStore,
+    groups: &[CopilotByokGroup],
+    confirm_unmanaged_clear: bool,
+) -> Result<CopilotCliState, AppError> {
+    #[cfg(windows)]
+    {
+        use_official_with_backend(
+            store,
+            groups,
+            &WindowsUserEnvironment,
+            confirm_unmanaged_clear,
+            store::save_device_store,
+        )
+    }
+    #[cfg(unix)]
+    {
+        use_official_with_backend(
+            store,
+            groups,
+            &UnixUserEnvironment::new()?,
+            confirm_unmanaged_clear,
+            store::save_device_store,
+        )
+    }
+}
+
 pub(super) fn validate_selection(
     store: &CopilotByokStore,
     groups: &[CopilotByokGroup],
@@ -1058,6 +1394,7 @@ mod tests {
     struct MemoryEnvironment {
         values: RefCell<BTreeMap<String, String>>,
         broadcasts: Cell<usize>,
+        fail_broadcast: Cell<bool>,
     }
 
     impl UserEnvironment for MemoryEnvironment {
@@ -1085,6 +1422,11 @@ mod tests {
             _after: &BTreeMap<String, Option<String>>,
         ) -> Result<(), AppError> {
             self.broadcasts.set(self.broadcasts.get() + 1);
+            if self.fail_broadcast.get() {
+                return Err(AppError::Config(
+                    "simulated environment broadcast failure".to_string(),
+                ));
+            }
             Ok(())
         }
     }
@@ -1100,6 +1442,8 @@ mod tests {
             notes: None,
             icon: None,
             icon_color: None,
+            category: None,
+            usage_script: None,
             enabled: true,
             request_headers: BTreeMap::from([(
                 "X-Token".to_string(),
@@ -1151,6 +1495,33 @@ mod tests {
         assert_eq!(
             desired["COPILOT_PROVIDER_WIRE_MODEL"].as_deref(),
             Some("wire-model")
+        );
+    }
+
+    #[test]
+    fn imports_an_existing_environment_as_a_stable_round_trip_provider() {
+        let provider = group();
+        let mut environment =
+            desired_environment(&provider, &provider.models[0]).expect("source environment");
+        environment.insert(
+            "COPILOT_MODEL".to_string(),
+            Some("user-facing-model".to_string()),
+        );
+
+        let imported =
+            imported_group_from_environment(&environment, "Imported Copilot CLI Environment")
+                .expect("import environment")
+                .expect("environment should produce a provider");
+        let imported_again =
+            imported_group_from_environment(&environment, "Imported Copilot CLI Environment (2)")
+                .expect("repeat import")
+                .expect("environment should produce a provider");
+
+        assert_eq!(imported.id, imported_again.id);
+        assert_eq!(imported.models[0].name, "user-facing-model");
+        assert_eq!(
+            desired_environment(&imported, &imported.models[0]).expect("round-trip environment"),
+            environment
         );
     }
 
@@ -1341,7 +1712,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_then_disable_restores_original_values() {
+    fn apply_then_disable_selects_official_instead_of_restoring_hidden_values() {
         let environment = MemoryEnvironment::default();
         environment
             .values
@@ -1370,17 +1741,188 @@ mod tests {
         );
 
         let disabled = disable_with_backend(&mut store, &groups, &environment, |_| Ok(()))
-            .expect("restore CLI environment");
+            .expect("activate Official environment");
         assert!(!disabled.enabled);
-        assert_eq!(
-            environment.values.borrow().get("COPILOT_MODEL"),
-            Some(&"original-model".to_string())
-        );
+        assert!(!environment.values.borrow().contains_key("COPILOT_MODEL"));
         assert!(!environment
             .values
             .borrow()
             .contains_key("COPILOT_PROVIDER_BASE_URL"));
         assert_eq!(environment.broadcasts.get(), 2);
+    }
+
+    #[test]
+    fn official_provider_clears_custom_values_instead_of_restoring_them() {
+        let environment = MemoryEnvironment::default();
+        environment.values.borrow_mut().extend([
+            (
+                "COPILOT_PROVIDER_BASE_URL".to_string(),
+                "https://old-provider.example.com/v1".to_string(),
+            ),
+            ("COPILOT_MODEL".to_string(), "old-custom-model".to_string()),
+        ]);
+        let groups = vec![group()];
+        let mut store = CopilotByokStore {
+            groups: groups.clone(),
+            ..CopilotByokStore::default()
+        };
+
+        let unmanaged = state_with_backend(&store, &groups, &environment)
+            .expect("inspect pre-existing custom environment");
+        assert!(!unmanaged.enabled);
+        assert!(!unmanaged.environment_matches);
+
+        apply_with_backend(
+            &mut store,
+            &groups,
+            "provider",
+            "model-record",
+            &environment,
+            |_| Ok(()),
+        )
+        .expect("apply CLI environment");
+
+        let official =
+            use_official_with_backend(&mut store, &groups, &environment, false, |_| Ok(()))
+                .expect("activate GitHub Copilot official provider");
+
+        assert!(!official.enabled);
+        assert!(official.selected_group_id.is_none());
+        assert!(official.environment_matches);
+        assert!(MANAGED_VARIABLES
+            .iter()
+            .all(|name| !environment.values.borrow().contains_key(*name)));
+        assert_eq!(environment.broadcasts.get(), 2);
+    }
+
+    #[test]
+    fn unmanaged_official_activation_requires_confirmation_without_a_restore_state() {
+        let environment = MemoryEnvironment::default();
+        environment.values.borrow_mut().insert(
+            "COPILOT_PROVIDER_BASE_URL".to_string(),
+            "https://unmanaged.example.com/v1".to_string(),
+        );
+        let groups = vec![group()];
+        let mut store = CopilotByokStore::default();
+
+        let error = use_official_with_backend(&mut store, &groups, &environment, false, |_| Ok(()))
+            .expect_err("unmanaged overrides require explicit confirmation");
+        assert!(matches!(error, AppError::Conflict(_)));
+        assert_eq!(
+            environment
+                .values
+                .borrow()
+                .get("COPILOT_PROVIDER_BASE_URL")
+                .map(String::as_str),
+            Some("https://unmanaged.example.com/v1")
+        );
+
+        let official =
+            use_official_with_backend(&mut store, &groups, &environment, true, |_| Ok(()))
+                .expect("confirmed official activation");
+        assert!(official.environment_matches);
+        assert!(!environment
+            .values
+            .borrow()
+            .contains_key("COPILOT_PROVIDER_BASE_URL"));
+
+        disable_with_backend(&mut store, &groups, &environment, |_| Ok(()))
+            .expect("Official selection remains idempotent");
+        assert!(!environment
+            .values
+            .borrow()
+            .contains_key("COPILOT_PROVIDER_BASE_URL"));
+    }
+
+    #[test]
+    fn official_persistence_failure_rolls_back_unmanaged_environment() {
+        let environment = MemoryEnvironment::default();
+        environment
+            .values
+            .borrow_mut()
+            .insert("COPILOT_MODEL".to_string(), "unmanaged-model".to_string());
+        let groups = vec![group()];
+        let mut store = CopilotByokStore::default();
+
+        let error = use_official_with_backend(&mut store, &groups, &environment, true, |_| {
+            Err(AppError::Config(
+                "simulated persistence failure".to_string(),
+            ))
+        })
+        .expect_err("persistence failure must roll back Official activation");
+
+        assert!(matches!(error, AppError::Config(_)));
+        assert_eq!(
+            environment
+                .values
+                .borrow()
+                .get("COPILOT_MODEL")
+                .map(String::as_str),
+            Some("unmanaged-model")
+        );
+        assert_eq!(store.cli, CopilotCliConfig::default());
+    }
+
+    #[test]
+    fn official_broadcast_failure_rolls_back_environment_and_selection() {
+        let environment = MemoryEnvironment::default();
+        environment
+            .values
+            .borrow_mut()
+            .insert("COPILOT_MODEL".to_string(), "unmanaged-model".to_string());
+        environment.fail_broadcast.set(true);
+        let groups = vec![group()];
+        let mut store = CopilotByokStore::default();
+
+        let error = use_official_with_backend(&mut store, &groups, &environment, true, |_| Ok(()))
+            .expect_err("broadcast failure must roll back Official activation");
+
+        assert!(error.to_string().contains("broadcast failure"));
+        assert_eq!(
+            environment
+                .values
+                .borrow()
+                .get("COPILOT_MODEL")
+                .map(String::as_str),
+            Some("unmanaged-model")
+        );
+        assert_eq!(store.cli, CopilotCliConfig::default());
+    }
+
+    #[test]
+    fn disabled_unix_state_reports_stale_managed_artifacts() {
+        let home = tempfile::tempdir().expect("temporary home");
+        let environment = UnixUserEnvironment {
+            home: home.path().to_path_buf(),
+        };
+        fs::create_dir_all(
+            environment
+                .env_path()
+                .parent()
+                .expect("environment path parent"),
+        )
+        .expect("create managed environment directory");
+        fs::write(
+            environment.env_path(),
+            "# Managed by CC Switch for GitHub Copilot CLI\nexport COPILOT_MODEL='stale'\n",
+        )
+        .expect("write stale environment file");
+        fs::write(
+            home.path().join(".profile"),
+            format!(
+                "before\n{}\nstale\n{}\nafter\n",
+                POSIX_BLOCK_START, POSIX_BLOCK_END
+            ),
+        )
+        .expect("write stale profile hook");
+
+        let conflicts = environment
+            .validate_managed_artifacts(&official_environment())
+            .expect("inspect stale artifacts");
+        assert!(conflicts
+            .iter()
+            .any(|path| path.ends_with("copilot-cli-env.sh")));
+        assert!(conflicts.iter().any(|path| path.ends_with(".profile")));
     }
 
     #[test]

@@ -11,9 +11,10 @@ pub use model::CopilotByokGroup;
 pub use sync::CopilotByokSyncResult;
 pub use vscode::{VsCodeEdition, VsCodeProfileTarget};
 
+use crate::app_config::AppType;
 use crate::database::Database;
 use crate::error::AppError;
-use crate::provider::Provider;
+use crate::provider::{Provider, ProviderMeta, UsageScript};
 use model::is_managed_group;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -29,6 +30,10 @@ static OPERATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 const CATALOG_APP_TYPE: &str = "copilot-byok-catalog";
 const CLI_CATALOG_APP_TYPE: &str = "copilot-cli-catalog";
 const LEGACY_CATALOG_APP_TYPE: &str = "copilot-byok";
+pub const COPILOT_CLI_OFFICIAL_PROVIDER_ID: &str = "copilot-cli-official";
+const COPILOT_CLI_OFFICIAL_PROVIDER_NAME: &str = "GitHub Copilot Official";
+const COPILOT_CLI_OFFICIAL_WEBSITE: &str = "https://github.com/features/copilot";
+const COPILOT_CLI_MIGRATED_PROVIDER_ID: &str = "copilot-cli-official-custom";
 
 /// Resolve GitHub Copilot CLI's home directory. `COPILOT_HOME` is honored so
 /// portable/test installations use the same location as the CLI itself.
@@ -43,21 +48,134 @@ pub(crate) fn copilot_cli_home() -> Result<PathBuf, AppError> {
 }
 
 fn group_to_provider(group: &CopilotByokGroup, sort_index: usize) -> Result<Provider, AppError> {
+    let mut settings_config =
+        serde_json::to_value(group).map_err(|error| AppError::JsonSerialize { source: error })?;
+    if let Some(settings) = settings_config.as_object_mut() {
+        settings.remove("usageScript");
+    }
     Ok(Provider {
         id: group.id.clone(),
         name: group.name.clone(),
-        settings_config: serde_json::to_value(group)
-            .map_err(|error| AppError::JsonSerialize { source: error })?,
+        settings_config,
         website_url: group.website_url.clone(),
         category: Some("custom".to_string()),
         created_at: None,
         sort_index: Some(sort_index),
         notes: group.notes.clone(),
-        meta: None,
+        meta: group.usage_script.clone().map(|usage_script| ProviderMeta {
+            usage_script: Some(usage_script),
+            ..Default::default()
+        }),
         icon: group.icon.clone(),
         icon_color: group.icon_color.clone(),
         in_failover_queue: false,
     })
+}
+
+fn copilot_cli_official_provider() -> Provider {
+    Provider {
+        id: COPILOT_CLI_OFFICIAL_PROVIDER_ID.to_string(),
+        name: COPILOT_CLI_OFFICIAL_PROVIDER_NAME.to_string(),
+        // Like Codex's OpenAI Official seed, this intentionally contains no
+        // third-party endpoint or credential. Selecting it is handled by the
+        // CLI environment adapter and returns routing to GitHub Copilot.
+        settings_config: serde_json::json!({ "official": true }),
+        website_url: Some(COPILOT_CLI_OFFICIAL_WEBSITE.to_string()),
+        category: Some("official".to_string()),
+        created_at: None,
+        sort_index: Some(0),
+        notes: None,
+        meta: None,
+        icon: Some("githubcopilot".to_string()),
+        icon_color: None,
+        in_failover_queue: false,
+    }
+}
+
+fn copilot_cli_official_group(provider: Option<&Provider>) -> CopilotByokGroup {
+    CopilotByokGroup {
+        id: COPILOT_CLI_OFFICIAL_PROVIDER_ID.to_string(),
+        name: COPILOT_CLI_OFFICIAL_PROVIDER_NAME.to_string(),
+        url: String::new(),
+        api_key: String::new(),
+        api_type: "chat-completions".to_string(),
+        website_url: Some(COPILOT_CLI_OFFICIAL_WEBSITE.to_string()),
+        notes: None,
+        icon: Some("githubcopilot".to_string()),
+        icon_color: None,
+        category: Some("official".to_string()),
+        usage_script: provider
+            .and_then(|provider| provider.meta.as_ref())
+            .and_then(|meta| meta.usage_script.clone()),
+        enabled: true,
+        request_headers: Default::default(),
+        models: Vec::new(),
+        extra: Default::default(),
+    }
+}
+
+fn remap_cli_official_collision_selection(store: &mut CopilotByokStore, migrated_id: &str) -> bool {
+    if store.cli.selected_group_id.as_deref() != Some(COPILOT_CLI_OFFICIAL_PROVIDER_ID) {
+        return false;
+    }
+    store.cli.selected_group_id = Some(migrated_id.to_string());
+    true
+}
+
+fn ensure_cli_official_provider(
+    db: &Database,
+    local_store: Option<&mut CopilotByokStore>,
+) -> Result<(), AppError> {
+    let providers = db.get_all_providers(CLI_CATALOG_APP_TYPE)?;
+    let Some(mut collision) = providers.get(COPILOT_CLI_OFFICIAL_PROVIDER_ID).cloned() else {
+        return db.save_provider(CLI_CATALOG_APP_TYPE, &copilot_cli_official_provider());
+    };
+    if collision.category.as_deref() == Some("official") {
+        return Ok(());
+    }
+
+    let mut migrated_id = COPILOT_CLI_MIGRATED_PROVIDER_ID.to_string();
+    let mut suffix = 2;
+    while providers.contains_key(&migrated_id) {
+        migrated_id = format!("{COPILOT_CLI_MIGRATED_PROVIDER_ID}-{suffix}");
+        suffix += 1;
+    }
+
+    // Persist the device-local selection first. If the database replacement
+    // fails, the next startup deterministically retries the same migration;
+    // it can never mistake the newly seeded Official row for the old custom
+    // selection after a partial cross-store update.
+    if let Some(store) = local_store {
+        if remap_cli_official_collision_selection(store, &migrated_id) {
+            store::save_device_store(store)?;
+        }
+    }
+
+    collision.id = migrated_id.clone();
+    collision.category = Some("custom".to_string());
+    if let Some(settings) = collision.settings_config.as_object_mut() {
+        settings.insert("id".to_string(), serde_json::Value::String(migrated_id));
+    }
+
+    let mut custom_providers = providers
+        .into_values()
+        .filter(|provider| provider.id != COPILOT_CLI_OFFICIAL_PROVIDER_ID)
+        .collect::<Vec<_>>();
+    custom_providers.push(collision);
+    custom_providers.sort_by(|left, right| {
+        left.sort_index
+            .unwrap_or(usize::MAX)
+            .cmp(&right.sort_index.unwrap_or(usize::MAX))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    for (index, provider) in custom_providers.iter_mut().enumerate() {
+        provider.sort_index = Some(index + 1);
+    }
+
+    let mut replacement = Vec::with_capacity(custom_providers.len() + 1);
+    replacement.push(copilot_cli_official_provider());
+    replacement.extend(custom_providers);
+    db.replace_provider_catalog(CLI_CATALOG_APP_TYPE, &replacement)
 }
 
 fn provider_to_group(provider: &Provider) -> Result<CopilotByokGroup, AppError> {
@@ -74,6 +192,15 @@ fn provider_to_group(provider: &Provider) -> Result<CopilotByokGroup, AppError> 
     group.notes = provider.notes.clone();
     group.icon = provider.icon.clone();
     group.icon_color = provider.icon_color.clone();
+    group.category =
+        (provider.category.as_deref() == Some("official")).then(|| "official".to_string());
+    if let Some(usage_script) = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.usage_script.clone())
+    {
+        group.usage_script = Some(usage_script);
+    }
     group.normalize();
     group.validate()?;
     Ok(group)
@@ -115,7 +242,35 @@ fn load_catalog(db: &Database) -> Result<Vec<CopilotByokGroup>, AppError> {
 }
 
 fn load_cli_catalog(db: &Database) -> Result<Vec<CopilotByokGroup>, AppError> {
-    load_catalog_from(db, CLI_CATALOG_APP_TYPE)
+    ensure_cli_official_provider(db, None)?;
+    let mut groups = db
+        .get_all_providers(CLI_CATALOG_APP_TYPE)?
+        .values()
+        .filter(|provider| provider.id != COPILOT_CLI_OFFICIAL_PROVIDER_ID)
+        .map(provider_to_group)
+        .collect::<Result<Vec<_>, _>>()?;
+    store::normalize_groups(&mut groups)?;
+    Ok(groups)
+}
+
+fn build_cli_provider_catalog(
+    db: &Database,
+    custom_groups: &[CopilotByokGroup],
+) -> Result<Vec<CopilotByokGroup>, AppError> {
+    let providers = db.get_all_providers(CLI_CATALOG_APP_TYPE)?;
+    let custom_by_id: HashMap<&str, &CopilotByokGroup> = custom_groups
+        .iter()
+        .map(|group| (group.id.as_str(), group))
+        .collect();
+    let mut groups = Vec::with_capacity(custom_groups.len() + 1);
+    for provider in providers.values() {
+        if provider.id == COPILOT_CLI_OFFICIAL_PROVIDER_ID {
+            groups.push(copilot_cli_official_group(Some(provider)));
+        } else if let Some(group) = custom_by_id.get(provider.id.as_str()) {
+            groups.push((*group).clone());
+        }
+    }
+    Ok(groups)
 }
 
 fn persist_catalog_to(
@@ -138,7 +293,100 @@ fn persist_catalog(db: &Database, groups: &[CopilotByokGroup]) -> Result<(), App
 }
 
 fn persist_cli_catalog(db: &Database, groups: &[CopilotByokGroup]) -> Result<(), AppError> {
-    persist_catalog_to(db, CLI_CATALOG_APP_TYPE, groups)
+    let mut normalized = groups.to_vec();
+    if normalized.iter().any(|group| {
+        group.id == COPILOT_CLI_OFFICIAL_PROVIDER_ID
+            || group.category.as_deref() == Some("official")
+    }) {
+        return Err(AppError::InvalidInput(
+            "The built-in GitHub Copilot Official provider cannot be replaced".to_string(),
+        ));
+    }
+    for group in &mut normalized {
+        group.category = None;
+    }
+    store::normalize_groups(&mut normalized)?;
+    let existing = db.get_all_providers(CLI_CATALOG_APP_TYPE)?;
+    let official_position = existing
+        .values()
+        .position(|provider| provider.id == COPILOT_CLI_OFFICIAL_PROVIDER_ID)
+        .unwrap_or(0)
+        .min(normalized.len());
+    let mut official = copilot_cli_official_provider();
+    if let Some(existing_official) = existing.get(COPILOT_CLI_OFFICIAL_PROVIDER_ID) {
+        official.meta = existing_official.meta.clone();
+    }
+    let mut providers = Vec::with_capacity(normalized.len() + 1);
+    providers.extend(
+        normalized
+            .iter()
+            .enumerate()
+            .map(|(sort_index, group)| group_to_provider(group, sort_index))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    providers.insert(official_position, official);
+    for (sort_index, provider) in providers.iter_mut().enumerate() {
+        provider.sort_index = Some(sort_index);
+    }
+    db.replace_provider_catalog(CLI_CATALOG_APP_TYPE, &providers)
+}
+
+fn persist_ordered_cli_catalog(db: &Database, groups: &[CopilotByokGroup]) -> Result<(), AppError> {
+    let official_count = groups
+        .iter()
+        .filter(|group| group.id == COPILOT_CLI_OFFICIAL_PROVIDER_ID)
+        .count();
+    if official_count != 1
+        || groups.iter().any(|group| {
+            group.category.as_deref() == Some("official")
+                && group.id != COPILOT_CLI_OFFICIAL_PROVIDER_ID
+        })
+    {
+        return Err(AppError::InvalidInput(
+            "Copilot CLI provider order must include the built-in Official provider exactly once"
+                .to_string(),
+        ));
+    }
+
+    let mut custom_groups = groups
+        .iter()
+        .filter(|group| group.id != COPILOT_CLI_OFFICIAL_PROVIDER_ID)
+        .cloned()
+        .collect::<Vec<_>>();
+    for group in &mut custom_groups {
+        group.category = None;
+    }
+    store::normalize_groups(&mut custom_groups)?;
+    let custom_by_id: HashMap<&str, &CopilotByokGroup> = custom_groups
+        .iter()
+        .map(|group| (group.id.as_str(), group))
+        .collect();
+
+    let existing = db.get_all_providers(CLI_CATALOG_APP_TYPE)?;
+    let mut official = copilot_cli_official_provider();
+    if let Some(existing_official) = existing.get(COPILOT_CLI_OFFICIAL_PROVIDER_ID) {
+        official.meta = existing_official.meta.clone();
+    }
+    let providers = groups
+        .iter()
+        .enumerate()
+        .map(|(sort_index, group)| {
+            if group.id == COPILOT_CLI_OFFICIAL_PROVIDER_ID {
+                let mut provider = official.clone();
+                provider.sort_index = Some(sort_index);
+                Ok(provider)
+            } else {
+                let normalized = custom_by_id.get(group.id.as_str()).ok_or_else(|| {
+                    AppError::InvalidInput(format!(
+                        "Unknown Copilot CLI provider in order: {}",
+                        group.id
+                    ))
+                })?;
+                group_to_provider(normalized, sort_index)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    db.replace_provider_catalog(CLI_CATALOG_APP_TYPE, &providers)
 }
 
 fn collapse_cli_catalog_to_default_models(
@@ -171,6 +419,13 @@ fn collapse_cli_catalog_to_default_models(
 }
 
 fn normalize_cli_group(group: &mut CopilotByokGroup) -> Result<(), AppError> {
+    if group.id == COPILOT_CLI_OFFICIAL_PROVIDER_ID || group.category.as_deref() == Some("official")
+    {
+        return Err(AppError::InvalidInput(
+            "The built-in GitHub Copilot Official provider cannot be edited".to_string(),
+        ));
+    }
+    group.category = None;
     group.normalize();
     if group.models.len() != 1 {
         return Err(AppError::InvalidInput(
@@ -182,8 +437,102 @@ fn normalize_cli_group(group: &mut CopilotByokGroup) -> Result<(), AppError> {
     group.validate()
 }
 
+fn imported_cli_provider_name(groups: &[CopilotByokGroup]) -> String {
+    const BASE_NAME: &str = "Imported Copilot CLI Environment";
+    if !groups
+        .iter()
+        .any(|group| group.name.eq_ignore_ascii_case(BASE_NAME))
+    {
+        return BASE_NAME.to_string();
+    }
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{BASE_NAME} ({suffix})");
+        if !groups
+            .iter()
+            .any(|group| group.name.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn migrate_cli_environment_provider(
+    db: &Database,
+    store: &mut CopilotByokStore,
+    cli_groups: &mut Vec<CopilotByokGroup>,
+) -> Result<(), AppError> {
+    if store.cli_environment_import_initialized {
+        return Ok(());
+    }
+
+    let legacy_values = store.cli.managed_environment.original.clone();
+    let has_legacy_values = legacy_values.values().any(Option::is_some);
+    let import_current_environment =
+        !has_legacy_values && !store.cli.enabled && !store.cli.official_override_active;
+    let values = if has_legacy_values {
+        legacy_values
+    } else if import_current_environment {
+        cli::current_environment()?
+    } else {
+        cli::official_environment()
+    };
+
+    let import_name = imported_cli_provider_name(cli_groups);
+    let imported = match cli::imported_group_from_environment(&values, &import_name) {
+        Ok(group) => group,
+        Err(error) => {
+            // Keep the legacy snapshot and retry on a later startup. Hiding the
+            // obsolete restore action must never silently discard credentials
+            // from an environment shape that a newer build may understand.
+            log::warn!(
+                "Could not import the existing Copilot CLI environment as a provider: {error}"
+            );
+            return Ok(());
+        }
+    };
+
+    if let Some(imported) = imported {
+        let imported_id = imported.id.clone();
+        let imported_model_id = imported.models[0].id.clone();
+        if !cli_groups.iter().any(|group| group.id == imported_id) {
+            cli_groups.push(imported);
+            persist_cli_catalog(db, cli_groups)?;
+        }
+
+        if import_current_environment {
+            store.cli = store::CopilotCliConfig {
+                enabled: true,
+                official_override_active: false,
+                selected_group_id: Some(imported_id),
+                selected_model_id: Some(imported_model_id),
+                managed_environment: store::CopilotCliManagedEnvironment {
+                    original: cli::official_environment(),
+                    last_written: values,
+                },
+            };
+        } else if store.cli.official_override_active {
+            // The live environment is already Official; the old snapshot now
+            // lives in the provider catalog and no longer needs a restore flag.
+            store.cli = store::CopilotCliConfig::default();
+        } else if store.cli.enabled {
+            // Preserve the current selected provider, but future Official
+            // activation clears overrides instead of restoring hidden state.
+            store.cli.official_override_active = false;
+            store.cli.managed_environment.original = cli::official_environment();
+        }
+    } else if store.cli.official_override_active {
+        store.cli = store::CopilotCliConfig::default();
+    }
+
+    store.cli_environment_import_initialized = true;
+    store::save_device_store(store)
+}
+
 fn load_runtime_store(db: &Database) -> Result<CopilotByokStore, AppError> {
     let mut local = store::load_store()?;
+    ensure_cli_official_provider(db, Some(&mut local))?;
     if !local.groups.is_empty() {
         let existing = db.get_all_providers(CATALOG_APP_TYPE)?;
         let mut next_sort = existing.len();
@@ -229,6 +578,7 @@ fn load_runtime_store(db: &Database) -> Result<CopilotByokStore, AppError> {
         // CLI record on another device.
         persist_cli_catalog(db, &cli_groups)?;
     }
+    migrate_cli_environment_provider(db, &mut local, &mut cli_groups)?;
     let mut device_state_changed = !local.cli_single_model_catalog_initialized;
     if let Some(selected_group_id) = local.cli.selected_group_id.as_deref() {
         if let Some(default_model) = cli_groups
@@ -460,10 +810,11 @@ fn build_state(db: &Database, store: CopilotByokStore) -> Result<CopilotByokStat
 }
 
 fn build_cli_state(db: &Database, store: CopilotByokStore) -> Result<CopilotByokState, AppError> {
-    let groups = load_cli_catalog(db)?;
-    let cli = cli::get_state(&store, &groups)?;
+    let custom_groups = load_cli_catalog(db)?;
+    let cli = cli::get_state(&store, &custom_groups)?;
+    let groups = build_cli_provider_catalog(db, &custom_groups)?;
     Ok(CopilotByokState {
-        managed_model_count: groups
+        managed_model_count: custom_groups
             .iter()
             .map(CopilotByokGroup::enabled_model_count)
             .sum(),
@@ -564,10 +915,15 @@ pub fn set_cli_provider(
     db: &Database,
     group_id: &str,
     group_name: Option<&str>,
+    confirm_unmanaged_clear: bool,
 ) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
     let mut store = load_runtime_store(db)?;
     let groups = load_cli_catalog(db)?;
+    if group_id == COPILOT_CLI_OFFICIAL_PROVIDER_ID {
+        cli::use_official(&mut store, &groups, confirm_unmanaged_clear)?;
+        return build_cli_state(db, store);
+    }
     let group = resolve_cli_provider(&groups, group_id, group_name)?;
     let resolved_group_id = group.id.clone();
     let model = group.models.first().ok_or_else(|| {
@@ -591,6 +947,25 @@ pub fn disable_cli(db: &Database) -> Result<CopilotByokState, AppError> {
     let groups = load_cli_catalog(db)?;
     cli::disable(&mut store, &groups)?;
     build_cli_state(db, store)
+}
+
+pub(crate) fn cli_launch_environment(
+    db: &Database,
+    group_id: &str,
+) -> Result<std::collections::BTreeMap<String, Option<String>>, AppError> {
+    let _guard = operation_guard()?;
+    load_runtime_store(db)?;
+    if group_id == COPILOT_CLI_OFFICIAL_PROVIDER_ID {
+        return cli::launch_environment(None);
+    }
+    let groups = load_cli_catalog(db)?;
+    let group = groups
+        .iter()
+        .find(|group| group.id == group_id)
+        .ok_or_else(|| {
+            AppError::InvalidInput(format!("Unknown Copilot CLI provider: {group_id}"))
+        })?;
+    cli::launch_environment(Some(group))
 }
 
 pub fn sync_selected_on_startup(db: &Database) -> Result<(), AppError> {
@@ -619,6 +994,73 @@ pub(crate) fn cli_usage_catalog(db: &Database) -> Result<Vec<CopilotByokGroup>, 
     let _guard = operation_guard()?;
     load_runtime_store(db)?;
     load_cli_catalog(db)
+}
+
+pub(crate) fn provider_database_app_type(app_type: &AppType) -> &str {
+    match app_type {
+        AppType::CopilotByok => CATALOG_APP_TYPE,
+        AppType::CopilotCli => CLI_CATALOG_APP_TYPE,
+        _ => app_type.as_str(),
+    }
+}
+
+fn update_usage_script_for_catalog(
+    db: &Database,
+    app_type: AppType,
+    group_id: &str,
+    usage_script: UsageScript,
+) -> Result<CopilotByokState, AppError> {
+    crate::services::ProviderService::validate_usage_script_config(&usage_script)?;
+    let _guard = operation_guard()?;
+    let store = load_runtime_store(db)?;
+    if matches!(app_type, AppType::CopilotCli) {
+        ensure_cli_official_provider(db, None)?;
+    }
+    let database_app_type = provider_database_app_type(&app_type);
+    let mut provider = db
+        .get_provider_by_id(group_id, database_app_type)?
+        .ok_or_else(|| {
+            AppError::InvalidInput(format!(
+                "Unknown {} provider: {group_id}",
+                app_type.as_str()
+            ))
+        })?;
+    let previous = provider.clone();
+    provider
+        .meta
+        .get_or_insert_with(Default::default)
+        .usage_script = Some(usage_script);
+    db.save_provider(database_app_type, &provider)?;
+
+    let result = match app_type {
+        AppType::CopilotByok => build_state(db, store),
+        AppType::CopilotCli => build_cli_state(db, store),
+        _ => unreachable!("special catalog usage updates only support Copilot apps"),
+    };
+    result.map_err(|error| {
+        if let Err(rollback_error) = db.save_provider(database_app_type, &previous) {
+            return AppError::Config(format!(
+                "{error}; failed to roll back usage query configuration: {rollback_error}"
+            ));
+        }
+        error
+    })
+}
+
+pub fn update_usage_script(
+    db: &Database,
+    group_id: &str,
+    usage_script: UsageScript,
+) -> Result<CopilotByokState, AppError> {
+    update_usage_script_for_catalog(db, AppType::CopilotByok, group_id, usage_script)
+}
+
+pub fn update_cli_usage_script(
+    db: &Database,
+    group_id: &str,
+    usage_script: UsageScript,
+) -> Result<CopilotByokState, AppError> {
+    update_usage_script_for_catalog(db, AppType::CopilotCli, group_id, usage_script)
 }
 
 pub fn set_targets(db: &Database, target_ids: Vec<String>) -> Result<CopilotByokState, AppError> {
@@ -824,6 +1266,11 @@ pub fn upsert_cli_group(
 
 pub fn delete_cli_group(db: &Database, group_id: &str) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
+    if group_id == COPILOT_CLI_OFFICIAL_PROVIDER_ID {
+        return Err(AppError::InvalidInput(
+            "The built-in GitHub Copilot Official provider cannot be deleted".to_string(),
+        ));
+    }
     let store = load_runtime_store(db)?;
     let previous_groups = load_cli_catalog(db)?;
     let mut groups = previous_groups.clone();
@@ -849,14 +1296,15 @@ pub fn reorder_cli_groups(
 ) -> Result<CopilotByokState, AppError> {
     let _guard = operation_guard()?;
     let store = load_runtime_store(db)?;
-    let previous_groups = load_cli_catalog(db)?;
+    let custom_groups = load_cli_catalog(db)?;
+    let previous_groups = build_cli_provider_catalog(db, &custom_groups)?;
     let mut groups = previous_groups.clone();
     store::apply_group_order(&mut groups, &group_ids)?;
-    persist_cli_catalog(db, &groups)?;
+    persist_ordered_cli_catalog(db, &groups)?;
     match build_cli_state(db, store) {
         Ok(state) => Ok(state),
         Err(error) => {
-            persist_cli_catalog(db, &previous_groups).map_err(|rollback_error| {
+            persist_ordered_cli_catalog(db, &previous_groups).map_err(|rollback_error| {
                 AppError::Config(format!(
                     "{error}; failed to roll back Copilot CLI catalog: {rollback_error}"
                 ))
@@ -964,6 +1412,8 @@ mod tests {
             notes: None,
             icon: None,
             icon_color: None,
+            category: None,
+            usage_script: None,
             enabled: true,
             request_headers: BTreeMap::new(),
             models: vec![CopilotByokModel {
@@ -987,6 +1437,16 @@ mod tests {
             }],
             extra: BTreeMap::new(),
         }
+    }
+
+    fn usage_script(label: &str) -> UsageScript {
+        serde_json::from_value(json!({
+            "enabled": true,
+            "language": "javascript",
+            "code": format!("return {{ planName: '{label}', remaining: 1 }};"),
+            "timeout": 10
+        }))
+        .expect("usage script fixture")
     }
 
     #[test]
@@ -1109,6 +1569,120 @@ mod tests {
     }
 
     #[test]
+    fn usage_scripts_round_trip_and_official_metadata_survives_cli_reorder() -> Result<(), AppError>
+    {
+        let db = Database::memory()?;
+        let mut vscode = group("vscode", "VS Code Provider");
+        vscode.usage_script = Some(usage_script("vscode"));
+        persist_catalog(&db, std::slice::from_ref(&vscode))?;
+
+        let loaded = load_catalog(&db)?;
+        assert_eq!(loaded[0].usage_script, vscode.usage_script);
+        let stored = db
+            .get_provider_by_id("vscode", CATALOG_APP_TYPE)?
+            .expect("stored VS Code provider");
+        assert_eq!(
+            stored
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.usage_script.as_ref()),
+            vscode.usage_script.as_ref()
+        );
+        assert!(stored.settings_config.get("usageScript").is_none());
+
+        ensure_cli_official_provider(&db, None)?;
+        let mut official = db
+            .get_provider_by_id(COPILOT_CLI_OFFICIAL_PROVIDER_ID, CLI_CATALOG_APP_TYPE)?
+            .expect("official provider seed");
+        official
+            .meta
+            .get_or_insert_with(Default::default)
+            .usage_script = Some(usage_script("official"));
+        db.save_provider(CLI_CATALOG_APP_TYPE, &official)?;
+
+        let cli = group("cli", "CLI Provider");
+        let second = group("second", "Second CLI Provider");
+        persist_cli_catalog(&db, &[cli.clone(), second.clone()])?;
+        let visible = build_cli_provider_catalog(&db, &load_cli_catalog(&db)?)?;
+        let reordered = vec![
+            second,
+            visible
+                .iter()
+                .find(|group| group.id == COPILOT_CLI_OFFICIAL_PROVIDER_ID)
+                .expect("official visible group")
+                .clone(),
+            cli,
+        ];
+        persist_ordered_cli_catalog(&db, &reordered)?;
+
+        let visible = build_cli_provider_catalog(&db, &load_cli_catalog(&db)?)?;
+        assert_eq!(
+            visible
+                .iter()
+                .map(|group| group.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second", COPILOT_CLI_OFFICIAL_PROVIDER_ID, "cli"]
+        );
+        assert_eq!(visible[1].usage_script, Some(usage_script("official")));
+        Ok(())
+    }
+
+    #[test]
+    fn usage_queries_resolve_first_class_catalog_namespaces() {
+        assert_eq!(
+            provider_database_app_type(&AppType::CopilotByok),
+            CATALOG_APP_TYPE
+        );
+        assert_eq!(
+            provider_database_app_type(&AppType::CopilotCli),
+            CLI_CATALOG_APP_TYPE
+        );
+        assert_eq!(
+            provider_database_app_type(&AppType::Claude),
+            AppType::Claude.as_str()
+        );
+    }
+
+    #[test]
+    fn reserved_cli_official_id_collision_is_migrated_without_data_loss() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let collision = group(COPILOT_CLI_OFFICIAL_PROVIDER_ID, "Old Custom Provider");
+        let occupied = group(COPILOT_CLI_MIGRATED_PROVIDER_ID, "Existing Provider");
+        db.save_provider(CLI_CATALOG_APP_TYPE, &group_to_provider(&collision, 0)?)?;
+        db.save_provider(CLI_CATALOG_APP_TYPE, &group_to_provider(&occupied, 1)?)?;
+
+        ensure_cli_official_provider(&db, None)?;
+        let providers = db.get_all_providers(CLI_CATALOG_APP_TYPE)?;
+        let official = providers
+            .get(COPILOT_CLI_OFFICIAL_PROVIDER_ID)
+            .expect("official seed");
+        assert_eq!(official.category.as_deref(), Some("official"));
+        let migrated = providers
+            .get("copilot-cli-official-custom-2")
+            .expect("migrated custom provider");
+        assert_eq!(migrated.name, "Old Custom Provider");
+        assert_eq!(
+            migrated
+                .settings_config
+                .get("id")
+                .and_then(|value| value.as_str()),
+            Some("copilot-cli-official-custom-2")
+        );
+
+        let mut store = CopilotByokStore::default();
+        store.cli.selected_group_id = Some(COPILOT_CLI_OFFICIAL_PROVIDER_ID.to_string());
+        assert!(remap_cli_official_collision_selection(
+            &mut store,
+            "copilot-cli-official-custom-2"
+        ));
+        assert_eq!(
+            store.cli.selected_group_id.as_deref(),
+            Some("copilot-cli-official-custom-2")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn vscode_and_cli_provider_catalogs_are_independent() -> Result<(), AppError> {
         let db = Database::memory()?;
         let mut vscode = group("vscode", "VS Code Provider");
@@ -1130,6 +1704,14 @@ mod tests {
 
         assert_eq!(load_catalog(&db)?, vec![vscode.clone()]);
         assert_eq!(load_cli_catalog(&db)?, vec![cli.clone()]);
+        let official = db
+            .get_provider_by_id(COPILOT_CLI_OFFICIAL_PROVIDER_ID, CLI_CATALOG_APP_TYPE)?
+            .expect("Copilot CLI official provider seed");
+        assert_eq!(official.category.as_deref(), Some("official"));
+        let visible_cli_catalog = build_cli_provider_catalog(&db, &load_cli_catalog(&db)?)?;
+        assert_eq!(visible_cli_catalog[0].id, COPILOT_CLI_OFFICIAL_PROVIDER_ID);
+        assert_eq!(visible_cli_catalog[0].category.as_deref(), Some("official"));
+        assert!(visible_cli_catalog[0].models.is_empty());
 
         let mut migrated_cli = load_cli_catalog(&db)?;
         assert!(collapse_cli_catalog_to_default_models(
@@ -1152,6 +1734,9 @@ mod tests {
         assert!(db
             .get_provider_by_id("cli", CLI_CATALOG_APP_TYPE)?
             .is_none());
+        assert!(db
+            .get_provider_by_id(COPILOT_CLI_OFFICIAL_PROVIDER_ID, CLI_CATALOG_APP_TYPE)?
+            .is_some());
         Ok(())
     }
 
@@ -1206,6 +1791,11 @@ mod tests {
         normalize_cli_group(&mut single).expect("single model should normalize");
         assert!(single.enabled);
         assert!(single.models[0].enabled);
+        assert!(single.category.is_none());
+
+        let mut official = group(COPILOT_CLI_OFFICIAL_PROVIDER_ID, "Replacement");
+        let error = normalize_cli_group(&mut official).expect_err("official provider is fixed");
+        assert!(error.to_string().contains("cannot be edited"));
     }
 
     #[test]

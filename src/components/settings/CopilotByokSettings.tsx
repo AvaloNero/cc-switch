@@ -27,7 +27,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   AlertCircle,
-  Check,
+  BarChart3,
   Download,
   GripVertical,
   Loader2,
@@ -37,6 +37,7 @@ import {
   RotateCcw,
   Search,
   Trash2,
+  Terminal,
   Unplug,
   X,
 } from "lucide-react";
@@ -52,13 +53,16 @@ import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
 import { ProviderActions } from "@/components/providers/ProviderActions";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { copilotByokApi, copilotCliApi } from "@/lib/api";
+import UsageScriptModal from "@/components/UsageScriptModal";
+import { copilotByokApi, copilotCliApi, settingsApi } from "@/lib/api";
 import type {
   CopilotByokGroup,
   CopilotByokState,
   CopilotByokTargetState,
 } from "@/lib/api";
+import type { Provider, UsageScript } from "@/types";
 import { cn } from "@/lib/utils";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { CopilotByokGroupPanel } from "./CopilotByokGroupPanel";
 
@@ -70,7 +74,6 @@ type BusyAction =
   | "sync"
   | "remove"
   | "reorder"
-  | "cli-disable"
   | `cli-apply:${string}`
   | `import:${string}`
   | `restore:${string}`
@@ -107,12 +110,15 @@ interface SortableCopilotGroupCardProps {
   needsApply: boolean;
   disabled: boolean;
   testing: boolean;
+  switching: boolean;
   onEnable: () => void;
   onDisable: () => void;
   onSelect: () => void;
   onEdit: () => void;
   onDuplicate: () => void;
   onTest: () => void;
+  onConfigureUsage: () => void;
+  onOpenTerminal: () => void;
   onDelete: () => void;
   onOpenWebsite?: (url: string) => void;
 }
@@ -125,12 +131,15 @@ function SortableCopilotGroupCard({
   needsApply,
   disabled,
   testing,
+  switching,
   onEnable,
   onDisable,
   onSelect,
   onEdit,
   onDuplicate,
   onTest,
+  onConfigureUsage,
+  onOpenTerminal,
   onDelete,
   onOpenWebsite,
 }: SortableCopilotGroupCardProps) {
@@ -142,15 +151,21 @@ function SortableCopilotGroupCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: group.id, disabled });
+  } = useSortable({
+    id: group.id,
+    disabled,
+  });
   const description =
     group.notes?.trim() || group.websiteUrl?.trim() || group.url;
   const link =
     group.websiteUrl?.trim() || (!group.notes?.trim() ? group.url : null);
   const isCli = appId === "copilot-cli";
+  const isOfficial = isCli && group.category === "official";
 
   return (
     <div
+      role="group"
+      aria-label={group.name}
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn(
@@ -194,7 +209,7 @@ function SortableCopilotGroupCard({
               <h3 className="text-base font-semibold leading-none">
                 {group.name}
               </h3>
-              {active && (
+              {active && !isCli && (
                 <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
                   {t("provider.inUse")}
                 </Badge>
@@ -232,123 +247,64 @@ function SortableCopilotGroupCard({
         </div>
 
         <div className="pointer-events-none ml-auto flex flex-shrink-0 items-center gap-1.5 opacity-0 transition-opacity duration-200 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
-          <ProviderActions
-            appId={appId}
-            isCurrent={active}
-            isInConfig={group.enabled}
-            isTesting={testing}
-            onSwitch={isCli ? onSelect : onEnable}
-            onRemoveFromConfig={isCli ? undefined : onDisable}
-            onEdit={onEdit}
-            onDuplicate={onDuplicate}
-            onTest={onTest}
-            onDelete={onDelete}
-            isRemovalProtected={selected}
-            isDeletionProtected={selected}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface CopilotCliOfficialCardProps {
-  active: boolean;
-  disabled: boolean;
-  restoring: boolean;
-  onSelect: () => void;
-  onOpenWebsite?: (url: string) => void;
-}
-
-const COPILOT_OFFICIAL_WEBSITE = "https://github.com/features/copilot";
-
-function CopilotCliOfficialCard({
-  active,
-  disabled,
-  restoring,
-  onSelect,
-  onOpenWebsite,
-}: CopilotCliOfficialCardProps) {
-  const { t } = useTranslation();
-  const providerName = "GitHub Copilot Official";
-
-  return (
-    <div
-      role="group"
-      aria-label={providerName}
-      className={cn(
-        "group relative overflow-hidden rounded-xl border border-border bg-card p-4 text-card-foreground transition-all duration-300 hover:border-border-active hover:shadow-sm",
-        active && "border-blue-500/60 shadow-sm shadow-blue-500/10",
-      )}
-    >
-      <div
-        className={cn(
-          "pointer-events-none absolute inset-0 bg-gradient-to-r from-blue-500/10 to-transparent transition-opacity duration-500",
-          active ? "opacity-100" : "opacity-0",
-        )}
-      />
-      <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <div aria-hidden="true" className="w-5 flex-shrink-0" />
-          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted transition-transform duration-300 group-hover:scale-105">
-            <ProviderIcon
-              icon="githubcopilot"
-              name={providerName}
-              size={24}
-              showFallback={false}
-            />
-          </div>
-          <div className="min-w-0 flex-1 space-y-1">
-            <div className="flex min-h-7 flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold leading-none">
-                {providerName}
-              </h3>
-              {active ? (
-                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-                  {t("provider.inUse")}
-                </Badge>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              onClick={() => onOpenWebsite?.(COPILOT_OFFICIAL_WEBSITE)}
-              disabled={!onOpenWebsite}
-              className={cn(
-                "inline-flex max-w-full items-center overflow-hidden text-left text-sm text-blue-500 dark:text-blue-400",
-                onOpenWebsite
-                  ? "cursor-pointer transition-colors hover:underline"
-                  : "cursor-default",
+          {isOfficial ? (
+            <>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={onConfigureUsage}
+                title={t("provider.configureUsage")}
+                aria-label={t("provider.configureUsage")}
+                className="h-8 w-8 p-1"
+              >
+                <BarChart3 className="h-4 w-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={onOpenTerminal}
+                title={t("provider.openTerminal")}
+                aria-label={t("provider.openTerminal")}
+                className="h-8 w-8 p-1 hover:text-emerald-600 dark:hover:text-emerald-400"
+              >
+                <Terminal className="h-4 w-4" />
+              </Button>
+              {!active && (
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={onSelect}
+                  disabled={disabled}
+                  className="w-[4.5rem] px-2.5"
+                >
+                  {switching ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Play className="h-4 w-4" />
+                  )}
+                  {t("provider.enable")}
+                </Button>
               )}
-              title={COPILOT_OFFICIAL_WEBSITE}
-            >
-              <span className="min-w-0 truncate">
-                {COPILOT_OFFICIAL_WEBSITE}
-              </span>
-            </button>
-          </div>
-        </div>
-
-        <div className="pointer-events-none ml-auto flex flex-shrink-0 items-center gap-1.5 opacity-0 transition-opacity duration-200 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
-          <Button
-            size="sm"
-            variant={active ? "secondary" : "default"}
-            onClick={onSelect}
-            disabled={active || disabled}
-            className={cn(
-              "w-[4.5rem] px-2.5",
-              active &&
-                "bg-gray-200 text-muted-foreground hover:bg-gray-200 hover:text-muted-foreground dark:bg-gray-700 dark:hover:bg-gray-700",
-            )}
-          >
-            {restoring ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : active ? (
-              <Check className="h-4 w-4" />
-            ) : (
-              <Play className="h-4 w-4" />
-            )}
-            {active ? t("provider.inUse") : t("provider.enable")}
-          </Button>
+            </>
+          ) : (
+            <ProviderActions
+              appId={appId}
+              isCurrent={active}
+              isInConfig={group.enabled}
+              isTesting={testing}
+              onSwitch={isCli ? onSelect : onEnable}
+              onRemoveFromConfig={isCli ? undefined : onDisable}
+              onEdit={onEdit}
+              onDuplicate={onDuplicate}
+              onTest={onTest}
+              onConfigureUsage={onConfigureUsage}
+              onOpenTerminal={isCli ? onOpenTerminal : undefined}
+              onDelete={onDelete}
+              isRemovalProtected={selected}
+              isDeletionProtected={selected}
+              hideMainActionWhenCurrent={isCli}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -423,6 +379,9 @@ export const CopilotByokSettings = forwardRef<
       ? t("copilotByok.cli.confirmDelete")
       : t("copilotByok.confirmDelete"),
     confirmStop: t("copilotByok.confirmStop"),
+    officialConfirmTitle: t("copilotByok.cli.officialConfirmTitle"),
+    officialConfirm: t("copilotByok.cli.officialConfirm"),
+    officialConfirmAction: t("copilotByok.cli.officialConfirmAction"),
   };
   const [state, setState] = useState<CopilotByokState | null>(null);
   const [busy, setBusy] = useState<BusyAction>("load");
@@ -436,6 +395,9 @@ export const CopilotByokSettings = forwardRef<
   const [pendingDeleteGroup, setPendingDeleteGroup] =
     useState<CopilotByokGroup | null>(null);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  const [pendingOfficialGroup, setPendingOfficialGroup] =
+    useState<CopilotByokGroup | null>(null);
+  const [usageGroup, setUsageGroup] = useState<CopilotByokGroup | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -452,6 +414,10 @@ export const CopilotByokSettings = forwardRef<
     },
     [onStateChange],
   );
+
+  useTauriEvent<CopilotByokState>("copilot-cli-state-changed", (next) => {
+    if (isCliCatalog) commitState(next);
+  });
 
   const load = useCallback(
     async (showToast = false) => {
@@ -515,14 +481,23 @@ export const CopilotByokSettings = forwardRef<
     );
   }, [searchTerm, state?.groups]);
 
-  const showOfficialCliProvider = useMemo(() => {
-    if (!isCliCatalog) return false;
-    const keyword = searchTerm.trim().toLowerCase();
-    if (!keyword) return true;
-    return ["GitHub Copilot Official", COPILOT_OFFICIAL_WEBSITE].some((value) =>
-      value.toLowerCase().includes(keyword),
-    );
-  }, [isCliCatalog, searchTerm]);
+  const usageProvider = useMemo<Provider | null>(() => {
+    if (!usageGroup) return null;
+    const { usageScript: _, ...settingsConfig } = usageGroup;
+    return {
+      id: usageGroup.id,
+      name: usageGroup.name,
+      settingsConfig,
+      websiteUrl: usageGroup.websiteUrl ?? undefined,
+      category: usageGroup.category ?? undefined,
+      notes: usageGroup.notes ?? undefined,
+      icon: usageGroup.icon ?? undefined,
+      iconColor: usageGroup.iconColor ?? undefined,
+      meta: usageGroup.usageScript
+        ? { usage_script: usageGroup.usageScript }
+        : undefined,
+    };
+  }, [usageGroup]);
 
   const importTarget = useMemo(() => {
     const targets = state?.targets.filter((target) => !target.readError) ?? [];
@@ -625,12 +600,18 @@ export const CopilotByokSettings = forwardRef<
     }
   };
 
-  const selectCliGroup = async (group: CopilotByokGroup) => {
+  const applyCliGroup = async (
+    group: CopilotByokGroup,
+    confirmUnmanagedClear = false,
+  ) => {
     if (!isCliCatalog || busy) return;
     setBusy(`cli-apply:${group.id}`);
     try {
-      const next = await copilotCliApi.setSelection(group.id, group.name);
+      const next = confirmUnmanagedClear
+        ? await copilotCliApi.setSelection(group.id, group.name, true)
+        : await copilotCliApi.setSelection(group.id, group.name);
       commitState(next);
+      setPendingOfficialGroup(null);
       toast.success(t("copilotByok.cli.applySuccess"));
     } catch (error) {
       console.error(
@@ -643,22 +624,16 @@ export const CopilotByokSettings = forwardRef<
     }
   };
 
-  const disableCli = async () => {
+  const selectCliGroup = async (group: CopilotByokGroup) => {
     if (!isCliCatalog || busy) return;
-    setBusy("cli-disable");
-    try {
-      const next = await copilotCliApi.disable();
-      commitState(next);
-      toast.success(t("copilotByok.cli.disableSuccess"));
-    } catch (error) {
-      console.error(
-        "[CopilotByokSettings] Failed to restore GitHub Copilot official environment",
-        error,
-      );
-      toast.error(String(error));
-    } finally {
-      setBusy(null);
+    if (
+      group.category === "official" &&
+      state?.cli.officialActivationRequiresConfirmation
+    ) {
+      setPendingOfficialGroup(group);
+      return;
     }
+    await applyCliGroup(group);
   };
 
   const deleteGroup = async (group: CopilotByokGroup) => {
@@ -763,18 +738,62 @@ export const CopilotByokSettings = forwardRef<
     }
   };
 
+  const saveUsageScript = async (
+    group: CopilotByokGroup,
+    usageScript: UsageScript,
+  ) => {
+    try {
+      const next = await catalogApi.updateUsageScript(group.id, usageScript);
+      commitState(next);
+      toast.success(t("provider.usageSaved"));
+    } catch (error) {
+      console.error("[CopilotByokSettings] Failed to save usage script", {
+        catalogApp,
+        groupId: group.id,
+        error,
+      });
+      toast.error(t("provider.usageSaveFailed"), {
+        description: String(error),
+      });
+    } finally {
+      setUsageGroup(null);
+    }
+  };
+
+  const openCliTerminal = async (group: CopilotByokGroup) => {
+    if (!isCliCatalog) return;
+    try {
+      const cwd = await settingsApi.pickDirectory();
+      if (!cwd) return;
+      await copilotCliApi.openTerminal(group.id, cwd);
+      toast.success(t("provider.terminalOpened"));
+    } catch (error) {
+      console.error(
+        "[CopilotByokSettings] Failed to open Copilot CLI terminal",
+        {
+          groupId: group.id,
+          error,
+        },
+      );
+      toast.error(t("provider.terminalOpenFailed"), {
+        description: String(error),
+      });
+    }
+  };
+
   const handleGroupDragEnd = async ({ active, over }: DragEndEvent) => {
     if (!state || busy || !over || active.id === over.id) return;
-    const oldIndex = state.groups.findIndex(
+    const reorderableGroups = state.groups;
+    const oldIndex = reorderableGroups.findIndex(
       (group) => group.id === String(active.id),
     );
-    const newIndex = state.groups.findIndex(
+    const newIndex = reorderableGroups.findIndex(
       (group) => group.id === String(over.id),
     );
     if (oldIndex < 0 || newIndex < 0) return;
 
     const previousGroups = state.groups;
-    const reordered = arrayMove(state.groups, oldIndex, newIndex);
+    const reordered = arrayMove(reorderableGroups, oldIndex, newIndex);
     setState({ ...state, groups: reordered });
     setBusy("reorder");
     try {
@@ -921,6 +940,22 @@ export const CopilotByokSettings = forwardRef<
         onConfirm={() => void confirmStopManaging()}
         onCancel={() => setStopConfirmOpen(false)}
       />
+      <ConfirmDialog
+        isOpen={pendingOfficialGroup !== null}
+        title={copy.officialConfirmTitle}
+        message={`${copy.officialConfirm}\n\n${state?.cli.environmentConflicts.join(", ") ?? ""}`}
+        confirmText={copy.officialConfirmAction}
+        pending={
+          pendingOfficialGroup !== null &&
+          busy === `cli-apply:${pendingOfficialGroup.id}`
+        }
+        onConfirm={() => {
+          if (pendingOfficialGroup) {
+            void applyCliGroup(pendingOfficialGroup, true);
+          }
+        }}
+        onCancel={() => setPendingOfficialGroup(null)}
+      />
     </>
   );
 
@@ -928,6 +963,20 @@ export const CopilotByokSettings = forwardRef<
     return (
       <>
         <div className={cn("space-y-3", !isCliCatalog && "mt-4")}>
+          {isCliCatalog &&
+          state.cli.environmentConflicts.length > 0 &&
+          !state.cli.officialActivationRequiresConfirmation ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>{t("copilotByok.cli.conflictTitle")}</AlertTitle>
+              <AlertDescription className="break-all">
+                {t("copilotByok.cli.conflict")}
+                <span className="mt-1 block font-mono text-xs">
+                  {state.cli.environmentConflicts.join(", ")}
+                </span>
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <AnimatePresence>
             {isSearchOpen && (
               <motion.div
@@ -978,16 +1027,6 @@ export const CopilotByokSettings = forwardRef<
             )}
           </AnimatePresence>
 
-          {showOfficialCliProvider ? (
-            <CopilotCliOfficialCard
-              active={!state.cli.enabled}
-              disabled={Boolean(busy)}
-              restoring={busy === "cli-disable"}
-              onSelect={() => void disableCli()}
-              onOpenWebsite={onOpenWebsite}
-            />
-          ) : null}
-
           {!isCliCatalog && state.groups.length === 0 ? (
             <ProviderEmptyState
               appId={catalogApp}
@@ -998,7 +1037,7 @@ export const CopilotByokSettings = forwardRef<
                   : undefined
               }
             />
-          ) : filteredGroups.length === 0 && !showOfficialCliProvider ? (
+          ) : filteredGroups.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border px-6 py-8 text-center text-sm text-muted-foreground">
               {t("provider.noSearchResults")}
             </div>
@@ -1013,50 +1052,75 @@ export const CopilotByokSettings = forwardRef<
                 strategy={verticalListSortingStrategy}
               >
                 <div className="space-y-3">
-                  {filteredGroups.map((group) => (
-                    <SortableCopilotGroupCard
-                      key={group.id}
-                      appId={catalogApp}
-                      group={group}
-                      selected={Boolean(
-                        isCliCatalog &&
-                          state.cli.enabled &&
-                          state.cli.selectedGroupId === group.id,
-                      )}
-                      active={Boolean(
-                        isCliCatalog &&
-                          state.cli.enabled &&
-                          state.cli.selectedGroupId === group.id &&
-                          state.cli.environmentMatches,
-                      )}
-                      needsApply={Boolean(
-                        isCliCatalog &&
-                          state.cli.enabled &&
-                          state.cli.selectedGroupId === group.id &&
-                          !state.cli.environmentMatches,
-                      )}
-                      disabled={Boolean(busy)}
-                      testing={testingGroupId === group.id}
-                      onEnable={() => void toggleGroup(group, true)}
-                      onDisable={() => void toggleGroup(group, false)}
-                      onSelect={() => void selectCliGroup(group)}
-                      onEdit={() => {
-                        if (busy) return;
-                        setEditingGroup(group);
-                        setEditorOpen(true);
-                      }}
-                      onDuplicate={() => void duplicateGroup(group)}
-                      onTest={() => void testGroup(group)}
-                      onDelete={() => void deleteGroup(group)}
-                      onOpenWebsite={onOpenWebsite}
-                    />
-                  ))}
+                  {filteredGroups.map((group) => {
+                    const isOfficial =
+                      isCliCatalog && group.category === "official";
+                    const selected = Boolean(
+                      isCliCatalog &&
+                        (isOfficial
+                          ? !state.cli.enabled && state.cli.environmentMatches
+                          : state.cli.enabled &&
+                            state.cli.selectedGroupId === group.id),
+                    );
+                    const active = Boolean(
+                      isCliCatalog &&
+                        (isOfficial
+                          ? !state.cli.enabled && state.cli.environmentMatches
+                          : state.cli.enabled &&
+                            state.cli.selectedGroupId === group.id &&
+                            state.cli.environmentMatches),
+                    );
+                    const needsApply = Boolean(
+                      isCliCatalog &&
+                        !isOfficial &&
+                        state.cli.enabled &&
+                        state.cli.selectedGroupId === group.id &&
+                        !state.cli.environmentMatches,
+                    );
+                    return (
+                      <SortableCopilotGroupCard
+                        key={group.id}
+                        appId={catalogApp}
+                        group={group}
+                        selected={selected}
+                        active={active}
+                        needsApply={needsApply}
+                        disabled={Boolean(busy)}
+                        testing={testingGroupId === group.id}
+                        switching={busy === `cli-apply:${group.id}`}
+                        onEnable={() => void toggleGroup(group, true)}
+                        onDisable={() => void toggleGroup(group, false)}
+                        onSelect={() => void selectCliGroup(group)}
+                        onEdit={() => {
+                          if (busy) return;
+                          setEditingGroup(group);
+                          setEditorOpen(true);
+                        }}
+                        onDuplicate={() => void duplicateGroup(group)}
+                        onTest={() => void testGroup(group)}
+                        onConfigureUsage={() => setUsageGroup(group)}
+                        onOpenTerminal={() => void openCliTerminal(group)}
+                        onDelete={() => void deleteGroup(group)}
+                        onOpenWebsite={onOpenWebsite}
+                      />
+                    );
+                  })}
                 </div>
               </SortableContext>
             </DndContext>
           ) : null}
         </div>
         {groupEditor}
+        {usageProvider && usageGroup ? (
+          <UsageScriptModal
+            key={`${catalogApp}:${usageProvider.id}`}
+            provider={usageProvider}
+            appId={catalogApp}
+            isOpen
+            onClose={() => setUsageGroup(null)}
+            onSave={(script) => void saveUsageScript(usageGroup, script)}
+          />
+        ) : null}
         {confirmationDialogs}
       </>
     );

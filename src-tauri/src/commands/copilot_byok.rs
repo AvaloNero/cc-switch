@@ -2,10 +2,23 @@ use crate::app_config::AppType;
 use crate::copilot_byok::{
     self, CopilotByokGroup, CopilotByokImportResult, CopilotByokState, CopilotByokSyncResult,
 };
+use crate::provider::UsageScript;
 use crate::services::stream_check::{StreamCheckResult, StreamCheckService};
 use crate::services::{McpService, PromptService};
 use crate::store::AppState;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
+
+fn finish_cli_mutation(
+    app: &AppHandle,
+    result: Result<CopilotByokState, crate::error::AppError>,
+) -> Result<CopilotByokState, String> {
+    let next = result.map_err(String::from)?;
+    crate::tray::refresh_tray_menu(app);
+    if let Err(error) = app.emit("copilot-cli-state-changed", &next) {
+        log::warn!("Failed to emit Copilot CLI state change: {error}");
+    }
+    Ok(next)
+}
 
 fn reproject_shared_resources(state: &AppState) -> Result<(), String> {
     McpService::sync_enabled_for_app(state, &AppType::CopilotByok).map_err(String::from)?;
@@ -40,21 +53,28 @@ pub fn copilot_byok_set_cli_selection(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn copilot_cli_set_selection(
+    app: AppHandle,
     state: State<'_, AppState>,
     group_id: String,
     group_name: Option<String>,
+    confirm_unmanaged_clear: Option<bool>,
 ) -> Result<CopilotByokState, String> {
-    copilot_byok::set_cli_provider(state.db.as_ref(), &group_id, group_name.as_deref()).map_err(
-        |error| {
-            log::error!(
-                "Failed to activate Copilot CLI provider id='{}' name='{}': {}",
-                group_id,
-                group_name.as_deref().unwrap_or(""),
-                error
-            );
-            error.into()
-        },
-    )
+    let result = copilot_byok::set_cli_provider(
+        state.db.as_ref(),
+        &group_id,
+        group_name.as_deref(),
+        confirm_unmanaged_clear.unwrap_or(false),
+    );
+    let result = result.map_err(|error| {
+        log::error!(
+            "Failed to activate Copilot CLI provider id='{}' name='{}': {}",
+            group_id,
+            group_name.as_deref().unwrap_or(""),
+            error
+        );
+        error
+    });
+    finish_cli_mutation(&app, result)
 }
 
 #[tauri::command]
@@ -63,8 +83,46 @@ pub fn copilot_byok_disable_cli(state: State<'_, AppState>) -> Result<CopilotByo
 }
 
 #[tauri::command]
-pub fn copilot_cli_disable(state: State<'_, AppState>) -> Result<CopilotByokState, String> {
-    copilot_byok::disable_cli(state.db.as_ref()).map_err(Into::into)
+pub fn copilot_cli_disable(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CopilotByokState, String> {
+    finish_cli_mutation(&app, copilot_byok::disable_cli(state.db.as_ref()))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn copilot_cli_open_terminal(
+    state: State<'_, AppState>,
+    group_id: String,
+    cwd: Option<String>,
+) -> Result<bool, String> {
+    let environment =
+        copilot_byok::cli_launch_environment(state.db.as_ref(), &group_id).map_err(String::from)?;
+    super::misc::launch_terminal_running_with_env("copilot", "copilot_cli", &environment, cwd)?;
+    Ok(true)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn copilot_byok_update_usage_script(
+    state: State<'_, AppState>,
+    group_id: String,
+    usage_script: UsageScript,
+) -> Result<CopilotByokState, String> {
+    copilot_byok::update_usage_script(state.db.as_ref(), &group_id, usage_script)
+        .map_err(Into::into)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn copilot_cli_update_usage_script(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    group_id: String,
+    usage_script: UsageScript,
+) -> Result<CopilotByokState, String> {
+    finish_cli_mutation(
+        &app,
+        copilot_byok::update_cli_usage_script(state.db.as_ref(), &group_id, usage_script),
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -126,26 +184,38 @@ pub fn copilot_byok_reorder_groups(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn copilot_cli_upsert_group(
+    app: AppHandle,
     state: State<'_, AppState>,
     group: CopilotByokGroup,
 ) -> Result<CopilotByokState, String> {
-    copilot_byok::upsert_cli_group(state.db.as_ref(), group).map_err(Into::into)
+    finish_cli_mutation(
+        &app,
+        copilot_byok::upsert_cli_group(state.db.as_ref(), group),
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn copilot_cli_delete_group(
+    app: AppHandle,
     state: State<'_, AppState>,
     group_id: String,
 ) -> Result<CopilotByokState, String> {
-    copilot_byok::delete_cli_group(state.db.as_ref(), &group_id).map_err(Into::into)
+    finish_cli_mutation(
+        &app,
+        copilot_byok::delete_cli_group(state.db.as_ref(), &group_id),
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn copilot_cli_reorder_groups(
+    app: AppHandle,
     state: State<'_, AppState>,
     group_ids: Vec<String>,
 ) -> Result<CopilotByokState, String> {
-    copilot_byok::reorder_cli_groups(state.db.as_ref(), group_ids).map_err(Into::into)
+    finish_cli_mutation(
+        &app,
+        copilot_byok::reorder_cli_groups(state.db.as_ref(), group_ids),
+    )
 }
 
 #[tauri::command]

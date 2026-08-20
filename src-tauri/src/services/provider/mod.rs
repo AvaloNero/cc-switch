@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::app_config::AppType;
 use crate::database::{validate_cost_multiplier, validate_pricing_source};
 use crate::error::AppError;
-use crate::provider::{Provider, UsageResult};
+use crate::provider::{Provider, UsageResult, UsageScript};
 use crate::services::mcp::McpService;
 use crate::settings::CustomEndpoint;
 use crate::store::AppState;
@@ -3923,6 +3923,10 @@ wire_api = "responses"
 }
 
 impl ProviderService {
+    pub(crate) fn validate_usage_script_config(script: &UsageScript) -> Result<(), AppError> {
+        validate_usage_script(script)
+    }
+
     fn managed_codex_oauth_account_id(provider: &Provider) -> Option<String> {
         provider
             .meta

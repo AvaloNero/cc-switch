@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   deleteGroup: vi.fn(),
   reorderGroups: vi.fn(),
   checkConnection: vi.fn(),
+  updateUsageScript: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -26,8 +27,28 @@ vi.mock("@/lib/api", () => ({
     deleteGroup: mocks.deleteGroup,
     reorderGroups: mocks.reorderGroups,
     checkConnection: mocks.checkConnection,
+    updateUsageScript: mocks.updateUsageScript,
   },
   copilotCliApi: {},
+  settingsApi: { pickDirectory: vi.fn() },
+}));
+
+vi.mock("@/components/UsageScriptModal", () => ({
+  default: ({ provider, isOpen, onSave }: any) =>
+    isOpen ? (
+      <button
+        type="button"
+        onClick={() =>
+          onSave({
+            enabled: true,
+            language: "javascript",
+            code: "return { remaining: 1 };",
+          })
+        }
+      >
+        保存 {provider.name} 用量
+      </button>
+    ) : null,
 }));
 
 vi.mock("sonner", () => ({
@@ -56,6 +77,8 @@ vi.mock("react-i18next", () => ({
         "provider.duplicate": "复制",
         "provider.connectivityCheck": "检测连通",
         "provider.configureUsage": "配置用量查询",
+        "provider.usageSaved": "用量查询配置已保存",
+        "provider.usageSaveFailed": "用量查询配置保存失败",
         "usage.title": "使用统计",
         "apps.copilotByok": "VS Code Copilot",
         "common.refresh": "刷新",
@@ -109,6 +132,7 @@ function state(selected: boolean): CopilotByokState {
       selectedModelName: null,
       environmentMatches: false,
       environmentConflicts: [],
+      officialActivationRequiresConfirmation: false,
     },
   };
 }
@@ -147,6 +171,7 @@ const group: CopilotByokGroup = {
 
 describe("CopilotByokSettings", () => {
   beforeEach(() => {
+    mocks.updateUsageScript.mockReset();
     mocks.getState.mockResolvedValue(state(true));
     mocks.setTargets.mockResolvedValue(state(false));
     mocks.importModels.mockResolvedValue({
@@ -161,6 +186,10 @@ describe("CopilotByokSettings", () => {
     mocks.upsertGroup.mockResolvedValue(state(true));
     mocks.deleteGroup.mockResolvedValue(state(true));
     mocks.reorderGroups.mockResolvedValue(state(true));
+    mocks.updateUsageScript.mockResolvedValue({
+      ...state(true),
+      groups: [group],
+    });
   });
 
   it("loads with the VS Code default profile selected", async () => {
@@ -223,6 +252,21 @@ describe("CopilotByokSettings", () => {
     expect(
       screen.queryByRole("button", { name: "添加供应商" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("opens and saves usage query configuration for VS Code Copilot providers", async () => {
+    mocks.getState.mockResolvedValue({ ...state(true), groups: [group] });
+    render(<CopilotByokSettings mode="catalog" />);
+
+    fireEvent.click(await screen.findByTitle("配置用量查询"));
+    fireEvent.click(await screen.findByText("保存 Moonshot 用量"));
+
+    await waitFor(() =>
+      expect(mocks.updateUsageScript).toHaveBeenCalledWith(
+        "moonshot",
+        expect.objectContaining({ enabled: true }),
+      ),
+    );
   });
 
   it("reuses the standard empty state and imports the selected VS Code config", async () => {
