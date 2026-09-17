@@ -5,7 +5,7 @@ use crate::init_status::{InitErrorPayload, SkillsMigrationPayload};
 use crate::services::ProviderService;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tauri::AppHandle;
@@ -821,7 +821,7 @@ async fn get_single_tool_version_impl(
             }
         }
         "openclaw" => fetch_npm_latest_for_tool(&client, "openclaw", tool, local).await,
-        "hermes" => fetch_pypi_latest_version(&client, "hermes-agent").await,
+        "hermes" => fetch_hermes_latest_version(&client, local).await,
         "pi" => {
             fetch_npm_latest_for_tool(&client, "@earendil-works/pi-coding-agent", tool, local).await
         }
@@ -945,15 +945,37 @@ fn pick_latest_version(
     Some(best)
 }
 
+/// npm 包 dist-tags 专用端点的 URL。
+///
+/// 该端点的响应体就是 dist-tags 对象本身(几十到几千字节);而 `/{package}` 返回的是
+/// 含每个历史版本元数据的完整 packument,codex / opencode / openclaw 这类高频发版的包
+/// 已有十几到二十几 MB,一次刷新要下几十 MB(#7339)。scoped 包名的 `/` 按 registry
+/// 约定转义成 `%2f`。
+fn npm_dist_tags_url(package: &str) -> String {
+    format!(
+        "https://registry.npmjs.org/-/package/{}/dist-tags",
+        package.replace('/', "%2f")
+    )
+}
+
 /// 拉取 npm 包的完整 dist-tags(单次请求即含 latest/next/beta/...)。
+///
+/// 与 GitHub / PyPI 两条来源一样套 `LATEST_PROBE_TIMEOUT`:取不到就返回 None,由调用方
+/// 显示「未知」,而不是沿用全局客户端的 600s 总超时让卡片一直「加载中」。包不存在时
+/// 端点返回 404 与一个 JSON 字符串体,解析成 Map 失败,同样落到 None。
 async fn fetch_npm_dist_tags(
     client: &reqwest::Client,
     package: &str,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let url = format!("https://registry.npmjs.org/{package}");
-    let resp = client.get(&url).send().await.ok()?;
-    let json = resp.json::<serde_json::Value>().await.ok()?;
-    json.get("dist-tags")?.as_object().cloned()
+    let resp = client
+        .get(npm_dist_tags_url(package))
+        .timeout(LATEST_PROBE_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
+    resp.json::<serde_json::Map<String, serde_json::Value>>()
+        .await
+        .ok()
 }
 
 /// 查询某 npm 工具要展示的"最新版本":取 `latest`,并在本地版本领先时按工具的
@@ -968,33 +990,87 @@ async fn fetch_npm_latest_for_tool(
     pick_latest_version(&dist_tags, npm_prerelease_tags(tool), local_version)
 }
 
+/// 版本探测请求的请求级超时。全局客户端是给代理转发用的（总超时 600s / 连接 30s），
+/// 探测 latest 若沿用它，api.github.com / pypi.org 被阻断或握手后挂起时，Hermes 卡片
+/// 与「刷新 / 全部升级」按钮会一直等；探测拿不到就退到下一来源或显示未知即可。
+const LATEST_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Helper function to fetch latest version from GitHub releases
 async fn fetch_github_latest_version(client: &reqwest::Client, repo: &str) -> Option<String> {
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    match client
+    let resp = client
         .get(&url)
         .header("User-Agent", "cc-switch")
         .header("Accept", "application/vnd.github+json")
+        .timeout(LATEST_PROBE_TIMEOUT)
         .send()
         .await
-    {
-        Ok(resp) => {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
-                json.get("tag_name")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.strip_prefix('v').unwrap_or(s).to_string())
-            } else {
-                None
-            }
-        }
-        Err(_) => None,
+        .ok()?;
+    let json = resp.json::<serde_json::Value>().await.ok()?;
+    github_release_version_from_json(&json)
+}
+
+/// 从 GitHub latest release 的 JSON 中提取展示用版本号。
+///
+/// 优先取 release `name` 里能解析为语义版本的数字，其次才是 `tag_name`（去 `v` 前缀）：
+/// Hermes 的 tag 是日历式（`v2026.8.31`），CLI 自报的语义版本 `0.21.0` 只出现在
+/// name（"Hermes Agent v0.21.0 (v2026.8.31)"）里。两条路都经 `release_display_version`
+/// 过滤——日历式数字若被当成版本号，前端三段解析会成功（2026 > 0）并永久判定
+/// "有可用更新"，点升级后版本不变又触发"版本未变"误报；拿不到语义版本宁可返回
+/// None，让调用方退到别的来源。限流（403 JSON 只有 message）同样落到 None。
+fn github_release_version_from_json(json: &serde_json::Value) -> Option<String> {
+    let from_name = json
+        .get("name")
+        .and_then(|v| v.as_str())
+        .and_then(|name| release_display_version(&extract_version(name)));
+    from_name.or_else(|| {
+        json.get("tag_name")
+            .and_then(|v| v.as_str())
+            .and_then(|tag| release_display_version(tag.strip_prefix('v').unwrap_or(tag)))
+    })
+}
+
+/// 只接受能按语义版本解析、且首段不像年份（< 1000）的字符串作展示版本。
+fn release_display_version(candidate: &str) -> Option<String> {
+    match parse_semver(candidate) {
+        Some(([major, ..], _)) if major < 1000 => Some(candidate.to_string()),
+        _ => None,
     }
+}
+
+/// 兜底来源给出的 latest 若已被本地版本严格超过，则不展示（返回 None）——
+/// 展示一个比当前还旧的"最新版本"只会复现用户报告的"最新 < 当前"矛盾。
+/// 任一侧无法解析时按"未领先"保守处理，照常展示。
+fn drop_latest_behind_local(latest: Option<String>, local_version: Option<&str>) -> Option<String> {
+    let latest = latest?;
+    let local_leads = local_version
+        .and_then(|local| compare_semver(local, &latest))
+        .is_some_and(|ord| ord == std::cmp::Ordering::Greater);
+    (!local_leads).then_some(latest)
+}
+
+/// Hermes 的「最新版本」：GitHub Releases 为主，PyPI 兜底。
+///
+/// cc-switch 安装/升级 Hermes 走的是官方 install.sh（`git clone` main 分支）与
+/// `hermes update`（`git pull`），整条链路与 PyPI 无关；而 PyPI 的 `hermes-agent`
+/// 自 0.19.0（2026-07-20）起停更，上游只在 GitHub Releases 发版
+/// （#6475 / #6618 / #7033：「最新版本」长期停在 0.19.0、比当前还旧、升级按钮不出现）。
+/// 仅当 GitHub 不可达或被限流时才退到 PyPI，且该值已被本地超过时不展示，宁可显示未知。
+async fn fetch_hermes_latest_version(
+    client: &reqwest::Client,
+    local_version: Option<&str>,
+) -> Option<String> {
+    if let Some(version) = fetch_github_latest_version(client, "NousResearch/hermes-agent").await {
+        return Some(version);
+    }
+    let pypi = fetch_pypi_latest_version(client, "hermes-agent").await;
+    drop_latest_behind_local(pypi, local_version)
 }
 
 /// Helper function to fetch latest version from PyPI
 async fn fetch_pypi_latest_version(client: &reqwest::Client, package: &str) -> Option<String> {
     let url = format!("https://pypi.org/pypi/{package}/json");
-    match client.get(&url).send().await {
+    match client.get(&url).timeout(LATEST_PROBE_TIMEOUT).send().await {
         Ok(resp) => {
             if let Ok(json) = resp.json::<serde_json::Value>().await {
                 json.get("info")
@@ -3899,6 +3975,7 @@ echo "{config_path}"
         "alacritty" => launch_macos_open_app("Alacritty", &script_file, true),
         "kitty" => launch_macos_open_app("kitty", &script_file, false),
         "ghostty" => launch_macos_ghostty(&script_file),
+        "otty" => launch_macos_otty(&script_file),
         "wezterm" => launch_macos_open_app("WezTerm", &script_file, true),
         "kaku" => launch_macos_open_app("Kaku", &script_file, true),
         _ => launch_macos_terminal_app(&script_file),
@@ -3993,6 +4070,77 @@ fn launch_macos_terminal_app(script_file: &std::path::Path) -> Result<(), String
         &build_macos_terminal_applescript(script_file),
         "Terminal.app",
     )
+}
+
+#[cfg(target_os = "macos")]
+fn launch_macos_otty(script_file: &std::path::Path) -> Result<(), String> {
+    use std::process::Command;
+
+    let otty_cli = find_macos_otty_cli().ok_or_else(|| {
+        "未找到 Otty CLI。请将 Otty 安装到 /Applications 或 ~/Applications。".to_string()
+    })?;
+
+    let command = build_macos_dash_c_command(script_file);
+    let tab_result = Command::new(&otty_cli)
+        .args(["tab", "new", "--window", "0", "--command", &command])
+        .output()
+        .map_err(|e| format!("启动 Otty CLI 失败: {e}"))?;
+
+    if tab_result.status.success() {
+        return Ok(());
+    }
+
+    log::debug!(
+        "Otty 新建 Tab 失败，改为新建窗口: {}",
+        decode_command_output(&tab_result.stderr)
+    );
+
+    let window_result = Command::new(&otty_cli)
+        .args(["open", "--command", &command])
+        .output()
+        .map_err(|e| format!("启动 Otty CLI 失败: {e}"))?;
+
+    if window_result.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Otty 新建窗口失败 (exit code: {:?}): {}",
+            window_result.status.code(),
+            decode_command_output(&window_result.stderr)
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_otty_cli() -> Option<std::path::PathBuf> {
+    macos_otty_cli_candidates()
+        .into_iter()
+        .find(|path| path.is_file() && is_executable_file(path))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_otty_cli_candidates() -> Vec<std::path::PathBuf> {
+    let mut candidates = vec![std::path::PathBuf::from(
+        "/Applications/Otty.app/Contents/MacOS/otty-cli",
+    )];
+
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(
+            std::path::PathBuf::from(home).join("Applications/Otty.app/Contents/MacOS/otty-cli"),
+        );
+    }
+
+    candidates.push(std::path::PathBuf::from("/usr/local/bin/otty"));
+    candidates.push(std::path::PathBuf::from("/opt/homebrew/bin/otty"));
+
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            candidates.push(directory.join("otty"));
+            candidates.push(directory.join("otty-cli"));
+        }
+    }
+
+    candidates
 }
 
 /// macOS: iTerm2
@@ -4387,24 +4535,30 @@ fn escape_windows_batch_value(value: &str) -> String {
 /// Windows: Run a start command with common error handling
 #[cfg(target_os = "windows")]
 fn run_windows_start_command(args: &[&str], terminal_name: &str) -> Result<(), String> {
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     let mut full_args = vec!["/C", "start"];
     full_args.extend(args);
 
-    let output = Command::new("cmd")
+    // Never capture the launcher output here. `start` intentionally detaches the
+    // terminal, but that terminal inherits the launcher's stdio handles. Using
+    // `Command::output()` therefore keeps its pipe readers open until the whole
+    // terminal process tree exits, which makes the synchronous Tauri command—and
+    // consequently the desktop UI—appear hung for the lifetime of the terminal.
+    let status = Command::new("cmd")
         .args(&full_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
-        .output()
+        .status()
         .map_err(|e| format!("启动 {} 失败: {e}", terminal_name))?;
 
-    if !output.status.success() {
-        let stderr = decode_command_output(&output.stderr);
+    if !status.success() {
         return Err(format!(
-            "{} 启动失败 (exit code: {:?}): {}",
+            "{} 启动失败 (exit code: {:?})",
             terminal_name,
-            output.status.code(),
-            stderr
+            status.code(),
         ));
     }
 
@@ -4417,16 +4571,43 @@ fn run_windows_start_command(args: &[&str], terminal_name: &str) -> Result<(), S
 ///
 /// **Security**：`command_line` 会被原样拼进 shell/batch 脚本，调用方必须
 /// 保证它是可信字符串（当前只由后端硬编码调用）。
+fn unique_terminal_script_path(temp_dir: &Path, label: &str, extension: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let safe_label = label
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let safe_label = if safe_label.is_empty() {
+        "terminal"
+    } else {
+        &safe_label
+    };
+    temp_dir.join(format!(
+        "cc_switch_{safe_label}_{}_{timestamp}_{counter}.{extension}",
+        std::process::id()
+    ))
+}
+
 pub(crate) fn launch_terminal_running(command_line: &str, label: &str) -> Result<(), String> {
     let temp_dir = std::env::temp_dir();
-    let pid = std::process::id();
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     let (script_file, script_content) = {
-        let file = temp_dir.join(format!("cc_switch_{}_{}.sh", label, pid));
+        let file = unique_terminal_script_path(&temp_dir, label, "sh");
         let content = format!(
             r#"#!/usr/bin/env sh
-trap 'rm -f "{script_path}"' EXIT
+trap 'rm -f -- "$0"' EXIT
 echo "[cc-switch] Starting: {label}"
 echo ""
 {cmd}
@@ -4434,7 +4615,6 @@ echo ""
 echo "[cc-switch] Command exited. Press Enter to close."
 read -r _
 "#,
-            script_path = file.display(),
             label = label,
             cmd = command_line,
         );
@@ -4445,9 +4625,9 @@ read -r _
     {
         use std::os::unix::fs::PermissionsExt;
 
-        std::fs::write(&script_file, &script_content)
+        crate::config::atomic_write_private(&script_file, script_content.as_bytes())
             .map_err(|e| format!("写入启动脚本失败: {e}"))?;
-        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| format!("设置脚本权限失败: {e}"))?;
 
         let preferred = crate::settings::get_preferred_terminal();
@@ -4459,6 +4639,7 @@ read -r _
             "alacritty" => launch_macos_open_app("Alacritty", &script_file, true),
             "kitty" => launch_macos_open_app("kitty", &script_file, false),
             "ghostty" => launch_macos_ghostty(&script_file),
+            "otty" => launch_macos_otty(&script_file),
             "wezterm" => launch_macos_open_app("WezTerm", &script_file, true),
             "kaku" => launch_macos_open_app("Kaku", &script_file, true),
             _ => launch_macos_terminal_app(&script_file),
@@ -4480,9 +4661,9 @@ read -r _
         use std::os::unix::fs::PermissionsExt;
         use std::process::Command;
 
-        std::fs::write(&script_file, &script_content)
+        crate::config::atomic_write_private(&script_file, script_content.as_bytes())
             .map_err(|e| format!("写入启动脚本失败: {e}"))?;
-        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| format!("设置脚本权限失败: {e}"))?;
 
         let preferred = crate::settings::get_preferred_terminal();
@@ -4549,13 +4730,14 @@ read -r _
         let preferred = crate::settings::get_preferred_terminal();
         let terminal = preferred.as_deref().unwrap_or("cmd");
 
-        let bat_file = temp_dir.join(format!("cc_switch_{}_{}.bat", label, pid));
+        let bat_file = unique_terminal_script_path(&temp_dir, label, "bat");
         let content = format!(
             "@echo off\r\necho [cc-switch] Starting: {label}\r\necho.\r\n{cmd}\r\necho.\r\necho [cc-switch] Command exited. Press any key to close.\r\npause >nul\r\ndel \"%~f0\" >nul 2>&1\r\n",
             label = label,
             cmd = command_line,
         );
-        std::fs::write(&bat_file, &content).map_err(|e| format!("写入批处理文件失败: {e}"))?;
+        crate::config::atomic_write_private(&bat_file, content.as_bytes())
+            .map_err(|e| format!("写入批处理文件失败: {e}"))?;
 
         let bat_path = bat_file.to_string_lossy();
         let ps_cmd = format!("& '{}'", bat_path);
@@ -4591,9 +4773,124 @@ read -r _
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        let _ = (temp_dir, pid, command_line, label);
+        let _ = (temp_dir, command_line, label);
         Err("不支持的操作系统".to_string())
     }
+}
+
+fn validate_scoped_environment(
+    environment: &BTreeMap<String, Option<String>>,
+) -> Result<(), String> {
+    for (name, value) in environment {
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte == b'_' || byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        {
+            return Err(format!("非法环境变量名: {name}"));
+        }
+        if value.as_deref().is_some_and(|value| value.contains('\0')) {
+            return Err(format!("环境变量包含 NUL: {name}"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn build_windows_scoped_environment_command(
+    command_line: &str,
+    environment: &BTreeMap<String, Option<String>>,
+    cwd: Option<&Path>,
+) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    validate_scoped_environment(environment)?;
+    let mut script = String::from("$ErrorActionPreference = 'Stop'\r\n");
+    for (name, value) in environment {
+        match value {
+            Some(value) => {
+                let encoded = STANDARD.encode(value.as_bytes());
+                script.push_str(&format!(
+                    "$env:{name} = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}'))\r\n"
+                ));
+            }
+            None => script.push_str(&format!(
+                "Remove-Item -LiteralPath 'Env:{name}' -ErrorAction SilentlyContinue\r\n"
+            )),
+        }
+    }
+    if let Some(cwd) = cwd {
+        let encoded = STANDARD.encode(cwd.to_string_lossy().as_bytes());
+        script.push_str(&format!(
+            "Set-Location -LiteralPath ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')))\r\n"
+        ));
+    }
+    // `command_line` is backend-owned. User/provider data only appears as
+    // base64 payloads above and cannot change PowerShell syntax.
+    script.push_str("$ErrorActionPreference = 'Continue'\r\n");
+    script.push_str("& ");
+    script.push_str(command_line);
+    script.push_str("\r\n");
+
+    let mut utf16 = Vec::with_capacity(script.len() * 2);
+    for code_unit in script.encode_utf16() {
+        utf16.extend_from_slice(&code_unit.to_le_bytes());
+    }
+    Ok(format!(
+        "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand {}",
+        STANDARD.encode(utf16)
+    ))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn build_unix_scoped_environment_command(
+    command_line: &str,
+    environment: &BTreeMap<String, Option<String>>,
+    cwd: Option<&Path>,
+) -> Result<String, String> {
+    validate_scoped_environment(environment)?;
+    let mut lines = Vec::with_capacity(environment.len() + 2);
+    for (name, value) in environment {
+        match value {
+            Some(value) => lines.push(format!("export {name}={}", shell_single_quote(value))),
+            None => lines.push(format!("unset {name}")),
+        }
+    }
+    if let Some(cwd) = cwd {
+        lines.push(format!(
+            "cd -- {} || exit 1",
+            shell_single_quote(&cwd.to_string_lossy())
+        ));
+    }
+    lines.push(command_line.to_string());
+    Ok(lines.join("\n"))
+}
+
+/// Launch a trusted command with a process-scoped environment. Unlike the
+/// persistent Copilot CLI switcher, this never changes user environment state.
+pub(crate) fn launch_terminal_running_with_env(
+    command_line: &str,
+    label: &str,
+    environment: &BTreeMap<String, Option<String>>,
+    cwd: Option<String>,
+) -> Result<(), String> {
+    let cwd = resolve_launch_cwd(cwd)?;
+
+    #[cfg(target_os = "windows")]
+    let scoped_command =
+        build_windows_scoped_environment_command(command_line, environment, cwd.as_deref())?;
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let scoped_command =
+        build_unix_scoped_environment_command(command_line, environment, cwd.as_deref())?;
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let scoped_command = {
+        let _ = (command_line, environment, cwd);
+        return Err("不支持的操作系统".to_string());
+    };
+
+    launch_terminal_running(&scoped_command, label)
 }
 
 /// 设置窗口主题（Windows/macOS 标题栏颜色）
@@ -4615,6 +4912,104 @@ pub async fn set_window_theme(window: tauri::Window, theme: String) -> Result<()
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn terminal_launcher_uses_unique_sanitized_script_paths() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let first = unique_terminal_script_path(temp.path(), "copilot/cli", "sh");
+        let second = unique_terminal_script_path(temp.path(), "copilot/cli", "sh");
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(temp.path()));
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("cc_switch_copilot_cli_")));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_terminal_launcher_does_not_wait_for_terminal_process_tree() {
+        let started = std::time::Instant::now();
+        run_windows_start_command(
+            &[
+                "/B",
+                "powershell",
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "Start-Sleep -Seconds 4",
+            ],
+            "test terminal",
+        )
+        .expect("detached Windows terminal launcher should start");
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "launcher waited for the detached terminal process tree"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn scoped_copilot_terminal_encodes_secrets_and_working_directory() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+        let environment = BTreeMap::from([
+            (
+                "COPILOT_PROVIDER_API_KEY".to_string(),
+                Some("secret' %PATH% & value\nsecond".to_string()),
+            ),
+            ("COPILOT_PROVIDER_HEADERS".to_string(), None),
+        ]);
+        let cwd = Path::new(r"C:\Work Space\Project's");
+        let command = build_windows_scoped_environment_command("copilot", &environment, Some(cwd))
+            .expect("build scoped terminal command");
+
+        assert!(!command.contains("secret' %PATH%"));
+        let encoded = command
+            .split_whitespace()
+            .last()
+            .expect("encoded PowerShell payload");
+        let bytes = STANDARD.decode(encoded).expect("decode payload");
+        let words = bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        let script = String::from_utf16(&words).expect("UTF-16 PowerShell script");
+        assert!(script.contains("& copilot"));
+        assert!(script.contains(&STANDARD.encode("secret' %PATH% & value\nsecond")));
+        assert!(script.contains(&STANDARD.encode(cwd.to_string_lossy().as_bytes())));
+        assert!(script.contains("Remove-Item -LiteralPath 'Env:COPILOT_PROVIDER_HEADERS'"));
+    }
+
+    #[test]
+    fn scoped_terminal_rejects_untrusted_environment_names() {
+        let environment = BTreeMap::from([("BAD-NAME".to_string(), Some("value".to_string()))]);
+        assert!(validate_scoped_environment(&environment).is_err());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn scoped_unix_terminal_quotes_values_and_working_directory() {
+        let environment = BTreeMap::from([
+            (
+                "COPILOT_PROVIDER_API_KEY".to_string(),
+                Some("secret' value".to_string()),
+            ),
+            ("COPILOT_PROVIDER_HEADERS".to_string(), None),
+        ]);
+        let command = build_unix_scoped_environment_command(
+            "copilot",
+            &environment,
+            Some(Path::new("/tmp/Project O'Brien")),
+        )
+        .expect("build scoped terminal command");
+        assert!(command.contains("export COPILOT_PROVIDER_API_KEY='secret'\"'\"' value'"));
+        assert!(command.contains("unset COPILOT_PROVIDER_HEADERS"));
+        assert!(command.contains("cd -- '/tmp/Project O'\"'\"'Brien' || exit 1"));
+        assert!(command.ends_with("copilot"));
+    }
 
     /// 探测 helper 正常路径：spawn（含 pre_exec setsid）能启动、输出能捕获。
     /// `/bin/echo --version` 在 macOS/Linux 均即刻成功退出。
@@ -4819,6 +5214,95 @@ mod tests {
     }
 
     #[test]
+    fn github_release_version_prefers_semver_in_name_over_calendar_tag() {
+        // Hermes 官方 release：tag 日历式，语义版本只在 name 里；2026-08-19 起括号内还多了个 v
+        for (name, tag, want) in [
+            ("Hermes Agent v0.20.4 (2026.8.18)", "v2026.8.18", "0.20.4"),
+            ("Hermes Agent v0.21.0 (v2026.8.31)", "v2026.8.31", "0.21.0"),
+            (
+                "Hermes Agent v0.20.3 (2026.8.16.2)",
+                "v2026.8.16.2",
+                "0.20.3",
+            ),
+        ] {
+            let json = serde_json::json!({ "name": name, "tag_name": tag });
+            assert_eq!(
+                github_release_version_from_json(&json).as_deref(),
+                Some(want),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn github_release_version_falls_back_to_semver_tag() {
+        // opencode：name == tag，走 name 或 tag 结果一致
+        let named = serde_json::json!({ "name": "v1.18.18", "tag_name": "v1.18.18" });
+        assert_eq!(
+            github_release_version_from_json(&named).as_deref(),
+            Some("1.18.18")
+        );
+        let prose = serde_json::json!({ "name": "August refresh", "tag_name": "v1.18.18" });
+        assert_eq!(
+            github_release_version_from_json(&prose).as_deref(),
+            Some("1.18.18")
+        );
+        let unnamed = serde_json::json!({ "tag_name": "v1.2.3" });
+        assert_eq!(
+            github_release_version_from_json(&unnamed).as_deref(),
+            Some("1.2.3")
+        );
+    }
+
+    #[test]
+    fn github_release_version_rejects_calendar_versions_and_rate_limit_body() {
+        // name 与 tag 都只有日历式数字：不得把 2026.8.31 当版本号（前端会永久判定"可更新"）
+        let calendar = serde_json::json!({
+            "name": "Hermes Agent (2026.8.31)",
+            "tag_name": "v2026.8.31"
+        });
+        assert_eq!(github_release_version_from_json(&calendar), None);
+        let four_seg = serde_json::json!({ "tag_name": "v2026.8.16.2" });
+        assert_eq!(github_release_version_from_json(&four_seg), None);
+        // GitHub 未认证限流响应只有 message / documentation_url
+        let limited = serde_json::json!({
+            "message": "API rate limit exceeded for 1.2.3.4.",
+            "documentation_url": "https://docs.github.com/rest"
+        });
+        assert_eq!(github_release_version_from_json(&limited), None);
+        assert_eq!(
+            github_release_version_from_json(&serde_json::json!({})),
+            None
+        );
+    }
+
+    #[test]
+    fn hermes_pypi_fallback_is_hidden_when_local_leads() {
+        let pypi = || Some("0.19.0".to_string());
+        // GitHub 不可达、PyPI 仍停在 0.19.0：本地 0.21.0 时不展示旧值（否则"最新 < 当前"）
+        assert_eq!(drop_latest_behind_local(pypi(), Some("0.21.0")), None);
+        // 本地等于 / 落后 PyPI，或本地未知：照常展示
+        assert_eq!(
+            drop_latest_behind_local(pypi(), Some("0.19.0")).as_deref(),
+            Some("0.19.0")
+        );
+        assert_eq!(
+            drop_latest_behind_local(pypi(), Some("0.18.2")).as_deref(),
+            Some("0.19.0")
+        );
+        assert_eq!(
+            drop_latest_behind_local(pypi(), None).as_deref(),
+            Some("0.19.0")
+        );
+        // 本地无法解析时保守视为未领先
+        assert_eq!(
+            drop_latest_behind_local(pypi(), Some("unknown")).as_deref(),
+            Some("0.19.0")
+        );
+        assert_eq!(drop_latest_behind_local(None, Some("0.21.0")), None);
+    }
+
+    #[test]
     fn grok_lifecycle_metadata_is_consistent() {
         let requested = vec!["unsupported".to_string(), "grok".to_string()];
         assert_eq!(normalize_requested_tools(&requested), vec!["grok"]);
@@ -4947,6 +5431,20 @@ mod tests {
         assert_eq!(
             pick_latest_version(map, &["beta"], Some("0.200.0")),
             Some("0.135.0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_npm_dist_tags_url() {
+        // 普通包名直接拼进路径
+        assert_eq!(
+            npm_dist_tags_url("openclaw"),
+            "https://registry.npmjs.org/-/package/openclaw/dist-tags"
+        );
+        // scoped 包名的 `/` 按 registry 约定转义成 %2f
+        assert_eq!(
+            npm_dist_tags_url("@openai/codex"),
+            "https://registry.npmjs.org/-/package/@openai%2fcodex/dist-tags"
         );
     }
 
@@ -6828,6 +7326,27 @@ mod tests {
             script.contains(r#"set launcher_script to "exec sh '/tmp/cc_switch_launcher.sh'""#),
             "Terminal should replace the auto-created shell:\n{script}"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn otty_launcher_command_executes_the_temporary_script() {
+        assert_eq!(
+            build_macos_dash_c_command(Path::new("/tmp/cc_switch_launcher.sh")),
+            "exec sh '/tmp/cc_switch_launcher.sh'"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn otty_cli_candidates_include_bundle_and_installed_cli_locations() {
+        let candidates = macos_otty_cli_candidates();
+
+        assert!(candidates.contains(&PathBuf::from(
+            "/Applications/Otty.app/Contents/MacOS/otty-cli"
+        )));
+        assert!(candidates.contains(&PathBuf::from("/usr/local/bin/otty")));
+        assert!(candidates.contains(&PathBuf::from("/opt/homebrew/bin/otty")));
     }
 
     /// Restored windows should not receive the launcher command.

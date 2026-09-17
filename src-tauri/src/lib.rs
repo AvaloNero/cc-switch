@@ -9,9 +9,11 @@ mod codex_history_migration;
 mod codex_state_db;
 mod commands;
 mod config;
+mod copilot_byok;
 mod database;
 mod deeplink;
 mod error;
+mod file_transaction;
 mod gemini_config;
 mod gemini_mcp;
 mod grok_config;
@@ -20,6 +22,7 @@ mod init_status;
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
+mod mcode_config;
 mod mcp;
 mod model_capabilities;
 mod openclaw_config;
@@ -41,7 +44,8 @@ mod usage_script;
 
 pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
 pub use codex_config::{
-    get_codex_auth_path, get_codex_config_path, read_codex_live_settings, write_codex_live_atomic,
+    extract_codex_experimental_bearer_token, get_codex_auth_path, get_codex_config_path,
+    read_codex_live_settings, write_codex_live_atomic,
 };
 pub use commands::open_provider_terminal;
 pub use commands::*;
@@ -722,7 +726,14 @@ pub fn run() {
                 app_state.db.is_providers_empty().unwrap_or(false);
 
             for app_type in
-                crate::app_config::AppType::all().filter(|t| !t.is_additive_mode())
+                crate::app_config::AppType::all().filter(|t| {
+                    !t.is_additive_mode()
+                        && !matches!(
+                            t,
+                            crate::app_config::AppType::CopilotByok
+                                | crate::app_config::AppType::CopilotCli
+                        )
+                })
             {
                 if !crate::services::provider::should_import_default_config_on_startup(
                     &app_state,
@@ -871,6 +882,15 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to import Pi providers: {e}"),
             }
 
+            // Re-project the managed Copilot catalog on every launch. VS Code does
+            // not expose SecretStorage to external applications, so newer CC Switch
+            // versions may need to repair derived per-model authentication headers
+            // even when the catalog itself has not changed.
+            match crate::copilot_byok::sync_selected_on_startup(app_state.db.as_ref()) {
+                Ok(()) => log::debug!("✓ Synchronized Copilot BYOK profiles"),
+                Err(e) => log::warn!("✗ Failed to synchronize Copilot BYOK profiles: {e}"),
+            }
+
             // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
             {
                 let has_omo = app_state
@@ -985,9 +1005,11 @@ pub fn run() {
                     crate::app_config::AppType::Gemini,
                     crate::app_config::AppType::GrokBuild,
                     crate::app_config::AppType::OpenCode,
+                    crate::app_config::AppType::CopilotCli,
                     crate::app_config::AppType::OpenClaw,
                     crate::app_config::AppType::Hermes,
                     crate::app_config::AppType::Pi,
+                    crate::app_config::AppType::Mcode,
                 ] {
                     match crate::services::prompt::PromptService::import_from_file_on_first_launch(
                         &app_state,
@@ -1268,6 +1290,11 @@ pub fn run() {
                     const SESSION_SYNC_INTERVAL_SECS: u64 = 60;
 
                     async fn run_session_sync(db: std::sync::Arc<crate::database::Database>, backfill: bool) {
+                        // 手动扫描模式下跳过定时扫描；backfill 轮（启动首轮）仍进入，
+                        // 费用回填只修补数据库既有行（含代理记账行），不读会话文件
+                        if !backfill && !crate::settings::get_settings().session_auto_sync_enabled {
+                            return;
+                        }
                         let _guard = crate::services::session_usage::session_sync_mutex()
                             .lock()
                             .await;
@@ -1276,6 +1303,9 @@ pub fn run() {
                                 if let Err(error) = db.backfill_missing_usage_costs() {
                                     log::warn!("Usage cost startup backfill failed: {error}");
                                 }
+                            }
+                            if !crate::settings::get_settings().session_auto_sync_enabled {
+                                return crate::services::session_usage::SessionSyncResult::default();
                             }
                             crate::services::session_usage::sync_all_unlocked(&db)
                         });
@@ -1469,7 +1499,8 @@ pub fn run() {
             commands::delete_profile,
             commands::clear_current_profile,
             commands::apply_profile,
-            // model list fetch (OpenAI-compatible /v1/models)
+            // Fetch OpenAI-compatible and Anthropic model lists. Response data structure:
+            // data[].id, data[]?.owned_by. Special: supports Zhipu OpenAI Responses models[].slug.
             commands::fetch_models_for_config,
             commands::get_opencode_models,
             // ours: endpoint speed test + custom endpoint management
@@ -1660,6 +1691,7 @@ pub fn run() {
             // Generic managed auth commands
             commands::auth_start_login,
             commands::auth_poll_for_account,
+            commands::auth_cancel_login,
             commands::auth_list_accounts,
             commands::auth_get_status,
             commands::auth_remove_account,
@@ -1681,6 +1713,30 @@ pub fn run() {
             commands::copilot_get_models_for_account,
             commands::copilot_get_usage,
             commands::copilot_get_usage_for_account,
+            // VS Code Copilot BYOK model catalog
+            commands::copilot_byok_get_state,
+            commands::copilot_cli_get_state,
+            commands::copilot_byok_set_cli_selection,
+            commands::copilot_cli_set_selection,
+            commands::copilot_byok_disable_cli,
+            commands::copilot_cli_disable,
+            commands::copilot_cli_open_terminal,
+            commands::copilot_byok_update_usage_script,
+            commands::copilot_cli_update_usage_script,
+            commands::copilot_byok_set_targets,
+            commands::copilot_byok_add_custom_target,
+            commands::copilot_byok_remove_custom_target,
+            commands::copilot_byok_upsert_group,
+            commands::copilot_byok_delete_group,
+            commands::copilot_byok_reorder_groups,
+            commands::copilot_cli_upsert_group,
+            commands::copilot_cli_delete_group,
+            commands::copilot_cli_reorder_groups,
+            commands::copilot_byok_sync,
+            commands::copilot_byok_import_models,
+            commands::copilot_byok_restore_backup,
+            commands::copilot_byok_check_connection,
+            commands::copilot_cli_check_connection,
             // OMO commands
             commands::read_omo_local_file,
             commands::get_current_omo_provider_id,

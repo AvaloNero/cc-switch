@@ -20,6 +20,7 @@ import type { ClaudeDesktopProviderPreset } from "@/config/claudeDesktopProvider
 import type { OpenCodeProviderPreset } from "@/config/opencodeProviderPresets";
 import type { OpenClawProviderPreset } from "@/config/openclawProviderPresets";
 import type { HermesProviderPreset } from "@/config/hermesProviderPresets";
+import type { McodeProviderPreset } from "@/config/mcodeProviderPresets";
 import type { PiProviderPreset } from "@/config/piProviderPresets";
 import type { ProviderCategory } from "@/types";
 import {
@@ -46,7 +47,8 @@ export type AnyPreset =
   | OpenCodeProviderPreset
   | OpenClawProviderPreset
   | HermesProviderPreset
-  | PiProviderPreset;
+  | PiProviderPreset
+  | McodeProviderPreset;
 
 export type PresetEntry = {
   id: string;
@@ -408,7 +410,7 @@ export function ProviderPresetSelector({
           <span className="truncate">{t("providerPreset.custom")}</span>
         </button>
 
-        {visiblePresetEntries.length === 0 && (
+        {searchQuery.trim().length > 0 && visiblePresetEntries.length === 0 && (
           <div className="col-span-full rounded-md border border-dashed border-border-default px-3 py-2 text-xs text-muted-foreground">
             {t("providerPreset.noSearchResults", {
               defaultValue: "No matching presets.",

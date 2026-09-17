@@ -56,6 +56,7 @@ import {
   type HermesProviderPreset,
 } from "@/config/hermesProviderPresets";
 import { OpenCodeFormFields } from "./OpenCodeFormFields";
+import { ProviderFormLayout } from "./shared";
 import { OpenClawFormFields } from "./OpenClawFormFields";
 import { HermesFormFields } from "./HermesFormFields";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
@@ -85,6 +86,7 @@ import { ClaudeDesktopProviderForm } from "./ClaudeDesktopProviderForm";
 import { GrokBuildProviderForm } from "./GrokBuildProviderForm";
 import { CodexFormFields } from "./CodexFormFields";
 import { GeminiFormFields } from "./GeminiFormFields";
+import { McodeProviderForm } from "./McodeProviderForm";
 import { PiProviderForm } from "./PiProviderForm";
 import { OmoFormFields } from "./OmoFormFields";
 import { parseOmoOtherFieldsObject } from "@/types/omo";
@@ -273,6 +275,7 @@ export interface ProviderFormProps {
 }
 
 export function ProviderForm(props: ProviderFormProps) {
+  if (props.appId === "mcode") return <McodeProviderForm {...props} />;
   if (props.appId === "pi") {
     return <PiProviderForm {...props} />;
   }
@@ -2138,10 +2141,9 @@ function ProviderFormFull({
   return (
     <>
       <Form {...form}>
-        <form
+        <ProviderFormLayout
           id="provider-form"
           onSubmit={form.handleSubmit(handleSubmit)}
-          className="space-y-6 glass rounded-xl p-6 border border-white/10"
         >
           {!initialData && (
             <ProviderPresetSelector
@@ -2799,7 +2801,7 @@ function ProviderFormFull({
               </Button>
             </div>
           )}
-        </form>
+        </ProviderFormLayout>
       </Form>
 
       <ConfirmDialog
