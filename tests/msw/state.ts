@@ -71,9 +71,12 @@ const createDefaultProviders = (): ProvidersByApp => ({
   },
   grokbuild: {},
   opencode: {},
+  "copilot-byok": {},
+  "copilot-cli": {},
   openclaw: {},
   hermes: {},
   pi: {},
+  mcode: {},
 });
 
 const createDefaultCurrent = (): CurrentProviderState => ({
@@ -83,9 +86,12 @@ const createDefaultCurrent = (): CurrentProviderState => ({
   gemini: "gemini-1",
   grokbuild: "",
   opencode: "",
+  "copilot-byok": "",
+  "copilot-cli": "",
   openclaw: "",
   hermes: "",
   pi: "",
+  mcode: "",
 });
 
 let providers = createDefaultProviders();
@@ -197,9 +203,12 @@ let mcpConfigs: McpConfigState = {
   gemini: {},
   grokbuild: {},
   opencode: {},
+  "copilot-byok": {},
+  "copilot-cli": {},
   openclaw: {},
   hermes: {},
   pi: {},
+  mcode: {},
 };
 
 const cloneProviders = (value: ProvidersByApp) =>
@@ -267,9 +276,12 @@ export const resetProviderState = () => {
     gemini: {},
     grokbuild: {},
     opencode: {},
+    "copilot-byok": {},
+    "copilot-cli": {},
     openclaw: {},
     hermes: {},
     pi: {},
+    mcode: {},
   };
 };
 

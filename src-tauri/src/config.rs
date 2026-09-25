@@ -152,6 +152,62 @@ fn derive_wsl_default_mcp_path(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Derive the WSL-side home directory from a WSL UNC path inside a user's
+/// home: `\\wsl$\<distro>\home\<user>\...` -> `\\wsl$\<distro>\home\<user>`,
+/// and `\\wsl.localhost\<distro>\root\...` -> `\\wsl.localhost\<distro>\root`.
+/// Returns None for non-WSL paths and for WSL paths outside a home directory
+/// (e.g. `\\wsl$\<distro>\etc`), where no home can be derived safely.
+#[cfg(windows)]
+pub(crate) fn derive_wsl_home_dir(dir: &Path) -> Option<PathBuf> {
+    use std::path::Prefix;
+
+    let normalized = normalize_path_lexically(dir);
+    let mut components = normalized.components();
+    let prefix = match components.next()? {
+        Component::Prefix(prefix) => prefix,
+        _ => return None,
+    };
+
+    let server = match prefix.kind() {
+        Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => server.to_string_lossy(),
+        _ => return None,
+    };
+
+    if !server.eq_ignore_ascii_case("wsl$") && !server.eq_ignore_ascii_case("wsl.localhost") {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    for component in components {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            Component::ParentDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    let home_len = match parts.as_slice() {
+        [home, user, ..] if home == "home" && !user.is_empty() => 2,
+        [root, ..] if root == "root" => 1,
+        _ => return None,
+    };
+
+    // Rebuild prefix + root + the first `home_len` components.
+    let mut home_dir = PathBuf::new();
+    let mut normal_seen = 0usize;
+    for component in normalized.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => home_dir.push(component.as_os_str()),
+            Component::Normal(_) if normal_seen < home_len => {
+                home_dir.push(component.as_os_str());
+                normal_seen += 1;
+            }
+            _ => break,
+        }
+    }
+    Some(home_dir)
+}
+
 fn default_mcp_path_for_config_dir(dir: &Path) -> Option<PathBuf> {
     let default_config_dir = get_home_dir().join(".claude");
     if path_eq_lexical(dir, &default_config_dir) {
@@ -291,6 +347,15 @@ fn sort_json_keys(value: &Value) -> Value {
 }
 
 /// 写入 JSON 配置文件并返回实际写入的字节。
+pub(crate) fn serialize_json_file_contents<T: Serialize>(data: &T) -> Result<Vec<u8>, AppError> {
+    let value = serde_json::to_value(data).map_err(|e| AppError::JsonSerialize { source: e })?;
+    let sorted_value = sort_json_keys(&value);
+    serde_json::to_string_pretty(&sorted_value)
+        .map(String::into_bytes)
+        .map_err(|e| AppError::JsonSerialize { source: e })
+}
+
+/// 写入 JSON 配置文件并返回实际写入的字节。
 pub fn write_json_file_with_contents<T: Serialize>(
     path: &Path,
     data: &T,
@@ -300,12 +365,7 @@ pub fn write_json_file_with_contents<T: Serialize>(
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
 
-    let value = serde_json::to_value(data).map_err(|e| AppError::JsonSerialize { source: e })?;
-    let sorted_value = sort_json_keys(&value);
-    let json = serde_json::to_string_pretty(&sorted_value)
-        .map_err(|e| AppError::JsonSerialize { source: e })?;
-
-    let contents = json.into_bytes();
+    let contents = serialize_json_file_contents(data)?;
     atomic_write(path, &contents)?;
     Ok(contents)
 }
@@ -313,6 +373,12 @@ pub fn write_json_file_with_contents<T: Serialize>(
 /// 写入 JSON 配置文件（键按字母排序，确保确定性输出）
 pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
     write_json_file_with_contents(path, data).map(|_| ())
+}
+
+/// 原子写入包含凭据的 JSON 文件。Unix 上从临时文件创建开始即使用 0600。
+pub fn write_json_file_private<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
+    let contents = serialize_json_file_contents(data)?;
+    atomic_write_private(path, &contents)
 }
 
 /// 原子写入文本文件（用于 TOML/纯文本）
@@ -641,6 +707,38 @@ mod tests {
         assert_eq!(
             derived,
             PathBuf::from(r"\\wsl.localhost\Ubuntu\root\.claude.json")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn derive_wsl_home_dir_from_opencode_config_dir() {
+        let dir = PathBuf::from(r"\\wsl.localhost\Ubuntu-26.04\home\travis\.config\opencode");
+        let home = derive_wsl_home_dir(&dir).expect("WSL home should be derived");
+        assert_eq!(
+            home,
+            PathBuf::from(r"\\wsl.localhost\Ubuntu-26.04\home\travis")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn derive_wsl_home_dir_supports_wsl_dollar_and_root() {
+        let dir = PathBuf::from(r"\\wsl$\Ubuntu\root\.config\opencode");
+        let home = derive_wsl_home_dir(&dir).expect("WSL root home should be derived");
+        assert_eq!(home, PathBuf::from(r"\\wsl$\Ubuntu\root"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn derive_wsl_home_dir_rejects_non_home_and_non_wsl_paths() {
+        assert_eq!(
+            derive_wsl_home_dir(&PathBuf::from(r"\\wsl$\Ubuntu\etc\opencode")),
+            None
+        );
+        assert_eq!(
+            derive_wsl_home_dir(&PathBuf::from(r"C:\Users\travis\.config\opencode")),
+            None
         );
     }
 
