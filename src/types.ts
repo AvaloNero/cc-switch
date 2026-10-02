@@ -189,10 +189,6 @@ export interface ProviderMeta {
   isPartner?: boolean;
   // 合作伙伴促销 key（用于后端识别 PackyCode 等）
   partnerPromotionKey?: string;
-  // 供应商成本倍率
-  costMultiplier?: string;
-  // 供应商计费模式来源
-  pricingModelSource?: string;
   // API 格式（Claude / Codex 供应商使用）
   // - "anthropic": 原生 Anthropic Messages API 格式，直接透传
   // - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
@@ -236,6 +232,18 @@ export interface ProviderMeta {
   providerType?: string;
   // GitHub Copilot 关联账号 ID（旧字段，保留兼容读取）
   githubAccountId?: string;
+  // Stack 模式下这家 Claude Code 供应商发布的模型；没有时按模型映射发布，空列表什么都不发布
+  stackModels?: ClaudeStackModel[];
+}
+
+// Stack 模式下 Claude Code 供应商发布的一个模型
+export interface ClaudeStackModel {
+  // 发往上游的模型名（不带 1M 标记）
+  model: string;
+  // 选择器里的显示名，没有时用模型名
+  displayName?: string;
+  // 上游是 1M 窗口
+  oneM?: boolean;
 }
 
 // Skill 同步方式
@@ -298,6 +306,9 @@ export interface VisibleApps {
   openclaw: boolean;
   hermes: boolean;
   pi: boolean;
+  mcode: boolean;
+  copilotByok: boolean;
+  copilotCli: boolean;
 }
 
 // WebDAV 同步状态
@@ -372,11 +383,15 @@ export interface Settings {
   silentStartup?: boolean;
   // 是否启用主页面本地代理功能（默认关闭）
   enableLocalProxy?: boolean;
+  // 是否在主页面显示 Stack 模式开关（默认关闭）。和 enableLocalProxy 二选一，只影响 Claude Code、Codex
+  enableStackMode?: boolean;
   // User has confirmed the local proxy first-run notice
   proxyConfirmed?: boolean;
   // User has confirmed the usage query first-run notice
   usageConfirmed?: boolean;
   usageDashboardRefreshIntervalMs?: number;
+  // 会话用量自动扫描开关（默认开启=自动模式；关闭后仅手动同步时扫描会话日志，代理记账不受影响）
+  sessionAutoSyncEnabled?: boolean;
   // Whether to show the failover toggle independently on the main page
   enableFailoverToggle?: boolean;
   // Whether to show the project profile switcher on the main page header
@@ -450,7 +465,7 @@ export interface Settings {
 
   // ===== 终端设置 =====
   // 首选终端应用（可选，默认使用系统默认终端）
-  // macOS: "terminal" | "iterm2" | "warp" | "alacritty" | "kitty" | "ghostty" | "wezterm" | "kaku"
+  // macOS: "terminal" | "iterm2" | "warp" | "alacritty" | "kitty" | "ghostty" | "otty" | "wezterm" | "kaku"
   // Windows: "cmd" | "powershell" | "wt"
   // Linux: "gnome-terminal" | "konsole" | "xfce4-terminal" | "alacritty" | "kitty" | "ghostty"
   preferredTerminal?: string;
@@ -503,12 +518,15 @@ export interface McpServerSpec {
 
 // v3.7.0: MCP 服务器应用启用状态
 export interface McpApps {
+  mcode?: boolean;
   claude: boolean;
   "claude-desktop"?: boolean;
   codex: boolean;
   gemini: boolean;
   grokbuild?: boolean;
   opencode: boolean;
+  "copilot-byok"?: boolean;
+  "copilot-cli"?: boolean;
   openclaw: boolean;
   hermes: boolean;
 }

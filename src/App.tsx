@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
@@ -14,7 +14,6 @@ import {
   X,
   Book,
   Brain,
-  Wrench,
   History,
   BarChart2,
   Download,
@@ -44,6 +43,7 @@ import { useProviderActions } from "@/hooks/useProviderActions";
 import { openclawKeys, useOpenClawHealth } from "@/hooks/useOpenClaw";
 import { hermesKeys, useOpenHermesWebUI } from "@/hooks/useHermes";
 import { hermesApi } from "@/lib/api/hermes";
+import type { ProviderEditorSave } from "@/lib/api/providers";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { useUsageCacheBridge } from "@/hooks/useUsageCacheBridge";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -69,6 +69,14 @@ import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SettingsPage } from "@/components/settings/SettingsPage";
+import {
+  CopilotByokSettings,
+  type CopilotByokSettingsHandle,
+} from "@/components/settings/CopilotByokSettings";
+import {
+  CopilotCliSettings,
+  type CopilotCliSettingsHandle,
+} from "@/components/settings/CopilotCliSettings";
 import { UpdateBadge } from "@/components/UpdateBadge";
 import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
@@ -93,9 +101,10 @@ import { DeepLinkImportDialog } from "@/components/DeepLinkImportDialog";
 import { FirstRunNoticeDialog } from "@/components/FirstRunNoticeDialog";
 import { AgentsPanel } from "@/components/agents/AgentsPanel";
 import { UniversalProviderPanel } from "@/components/universal";
-import { McpIcon } from "@/components/BrandIcons";
+import { McpIcon, SkillsIcon } from "@/components/BrandIcons";
 import { Button } from "@/components/ui/button";
 import { SessionManagerPage } from "@/components/sessions/SessionManagerPage";
+import type { UsageDefaultFilter } from "@/components/usage/UsageDashboard";
 import {
   useDisableCurrentOmo,
   useDisableCurrentOmoSlim,
@@ -110,6 +119,7 @@ import HermesMemoryPanel from "@/components/hermes/HermesMemoryPanel";
 import {
   APP_IDS,
   DEFAULT_VISIBLE_APPS,
+  isStackAppId,
   isProxyAppId,
 } from "@/config/appConfig";
 
@@ -124,6 +134,7 @@ type View =
   | "universal"
   | "sessions"
   | "workspace"
+  | "copilotTargets"
   | "openclawEnv"
   | "openclawTools"
   | "openclawAgents"
@@ -144,6 +155,9 @@ const getInitialApp = (): AppId => {
   if (saved && APP_IDS.includes(saved)) {
     return saved;
   }
+  if (localStorage.getItem(VIEW_STORAGE_KEY) === "copilotByok") {
+    return "copilot-byok";
+  }
   return "claude";
 };
 
@@ -159,6 +173,7 @@ const VALID_VIEWS: View[] = [
   "universal",
   "sessions",
   "workspace",
+  "copilotTargets",
   "openclawEnv",
   "openclawTools",
   "openclawAgents",
@@ -166,6 +181,9 @@ const VALID_VIEWS: View[] = [
 ];
 
 const getInitialView = (): View => {
+  if (localStorage.getItem(VIEW_STORAGE_KEY) === "copilotByok") {
+    return "providers";
+  }
   const saved = localStorage.getItem(VIEW_STORAGE_KEY) as View | null;
   if (saved && VALID_VIEWS.includes(saved)) {
     return saved;
@@ -178,12 +196,17 @@ function App() {
   const queryClient = useQueryClient();
 
   const [activeApp, setActiveApp] = useState<AppId>(getInitialApp);
-  const sharedFeatureApp: AppId =
-    activeApp === "claude-desktop" ? "claude" : activeApp;
   const [currentView, setCurrentView] = useState<View>(getInitialView);
+  const primaryToolbarApp: AppId = activeApp;
+  const sharedFeatureApp: AppId =
+    primaryToolbarApp === "claude-desktop" ? "claude" : primaryToolbarApp;
+  const isPrimaryView = currentView === "providers";
   const [skillsDiscoverySource, setSkillsDiscoverySource] =
     useState<SkillsPageSource>("repos");
   const [settingsDefaultTab, setSettingsDefaultTab] = useState("general");
+  const [usageDefaultFilter, setUsageDefaultFilter] = useState<
+    UsageDefaultFilter | undefined
+  >();
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [mcpManagementBusy, setMcpManagementBusy] = useState(false);
@@ -214,15 +237,24 @@ function App() {
     [settingsData?.visibleApps],
   );
 
+  const isAppVisible = (app: AppId): boolean => {
+    if (app === "copilot-byok") return visibleApps.copilotByok;
+    if (app === "copilot-cli") return visibleApps.copilotCli;
+    return visibleApps[app];
+  };
+
   const getFirstVisibleApp = (): AppId => {
-    return APP_IDS.find((app) => visibleApps[app]) ?? "claude";
+    return APP_IDS.find(isAppVisible) ?? "claude";
   };
 
   useEffect(() => {
-    if (!visibleApps[activeApp]) {
-      setActiveApp(getFirstVisibleApp());
+    const firstVisibleApp = getFirstVisibleApp();
+    const activeAppVisible = isAppVisible(activeApp);
+    if (currentView !== "providers" || activeAppVisible) return;
+    if (firstVisibleApp) {
+      setActiveApp(firstVisibleApp);
     }
-  }, [visibleApps, activeApp]);
+  }, [visibleApps, activeApp, currentView]);
 
   // Fallback from sessions view when switching to an app without session support
   useEffect(() => {
@@ -239,7 +271,10 @@ function App() {
       sharedFeatureApp !== "openclaw" &&
       sharedFeatureApp !== "gemini" &&
       sharedFeatureApp !== "hermes" &&
-      sharedFeatureApp !== "pi"
+      sharedFeatureApp !== "pi" &&
+      sharedFeatureApp !== "mcode" &&
+      sharedFeatureApp !== "copilot-byok" &&
+      sharedFeatureApp !== "copilot-cli"
     ) {
       setCurrentView("providers");
     }
@@ -256,8 +291,24 @@ function App() {
 
   const effectiveEditingProvider = useLastValidValue(editingProvider);
   const effectiveUsageProvider = useLastValidValue(usageProvider);
+  const mainScrollRef = useRef<HTMLElement>(null);
+  const providerScrollContainerRef = useRef<HTMLDivElement>(null);
 
   useUsageCacheBridge();
+
+  useLayoutEffect(() => {
+    if (currentView !== "providers") return;
+
+    for (const container of [
+      mainScrollRef.current,
+      providerScrollContainerRef.current,
+    ]) {
+      if (container) {
+        container.scrollTop = 0;
+        container.scrollLeft = 0;
+      }
+    }
+  }, [activeApp, currentView]);
 
   const promptPanelRef = useRef<PromptPanelHandle>(null);
   const [promptPrimaryAction, setPromptPrimaryAction] =
@@ -265,6 +316,8 @@ function App() {
   const mcpPanelRef = useRef<any>(null);
   const skillsPageRef = useRef<any>(null);
   const unifiedSkillsPanelRef = useRef<any>(null);
+  const copilotByokRef = useRef<CopilotByokSettingsHandle>(null);
+  const copilotCliRef = useRef<CopilotCliSettingsHandle>(null);
   // 订阅未管理 Skill 的共享缓存（实际扫描由 UnifiedSkillsPanel 进入页面时触发）。
   // 这里 enabled 默认 false，仅用于「导入」按钮的绿点提示，不主动发起扫描。
   const { data: unmanagedSkills } = useScanUnmanagedSkills();
@@ -293,6 +346,7 @@ function App() {
 
   const { data, isLoading, refetch } = useProvidersQuery(activeApp, {
     isProxyRunning: currentAppUsesProxy && isProxyRunning,
+    enabled: activeApp !== "copilot-byok" && activeApp !== "copilot-cli",
   });
   const { data: piCurrentState } = usePiCurrentState(activeApp === "pi");
   const providers = useMemo(() => data?.providers ?? {}, [data]);
@@ -316,7 +370,10 @@ function App() {
     sharedFeatureApp === "openclaw" ||
     sharedFeatureApp === "gemini" ||
     sharedFeatureApp === "hermes" ||
-    sharedFeatureApp === "pi";
+    sharedFeatureApp === "pi" ||
+    sharedFeatureApp === "mcode" ||
+    sharedFeatureApp === "copilot-byok" ||
+    sharedFeatureApp === "copilot-cli";
   const hasMcpSupport = sharedFeatureApp !== "pi";
 
   const {
@@ -616,6 +673,7 @@ function App() {
   useEffect(() => {
     const checkEnvOnSwitch = async () => {
       try {
+        if (activeApp === "mcode") return;
         const conflicts = await checkEnvConflicts(activeApp);
 
         if (conflicts.length > 0) {
@@ -677,7 +735,13 @@ function App() {
       if (isTextEditableTarget(event.target)) return;
 
       event.preventDefault();
-      setCurrentView(view === "skillsDiscovery" ? "skills" : "providers");
+      setCurrentView(
+        view === "skillsDiscovery"
+          ? "skills"
+          : view === "settings"
+            ? "providers"
+            : "providers",
+      );
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -707,11 +771,13 @@ function App() {
   const handleEditProvider = async ({
     provider,
     originalId,
+    editorSave,
   }: {
     provider: Provider;
     originalId?: string;
+    editorSave?: ProviderEditorSave;
   }) => {
-    await updateProvider(provider, originalId);
+    await updateProvider(provider, originalId, editorSave);
     setEditingProvider(null);
   };
 
@@ -758,6 +824,10 @@ function App() {
         await queryClient.invalidateQueries({
           queryKey: hermesKeys.liveProviderIds,
         });
+      } else if (activeApp === "mcode") {
+        await queryClient.invalidateQueries({
+          queryKey: ["providers", "mcode"],
+        });
       }
       toast.success(
         activeApp === "pi"
@@ -793,6 +863,25 @@ function App() {
   };
 
   const handleDuplicateProvider = async (provider: Provider) => {
+    if (
+      activeApp === "opencode" &&
+      provider.category !== "omo" &&
+      provider.category !== "omo-slim"
+    ) {
+      const { npm, models } = provider.settingsConfig;
+      if (
+        typeof npm !== "string" ||
+        !npm.trim() ||
+        !models ||
+        typeof models !== "object" ||
+        Array.isArray(models) ||
+        Object.keys(models).length === 0
+      ) {
+        toast.error(t("opencode.duplicateRequiresDefinition"));
+        return;
+      }
+    }
+
     const newSortIndex =
       provider.sortIndex !== undefined ? provider.sortIndex + 1 : undefined;
 
@@ -861,6 +950,13 @@ function App() {
         existingKeys,
       );
       duplicatedProvider.addToLive = false;
+    } else if (activeApp === "mcode") {
+      // The MCode list already includes its live custom nodes; the backend
+      // rejects a key that MCode itself owns.
+      duplicatedProvider.providerKey = generateUniqueProviderCopyKey(
+        provider.id,
+        Object.keys(providers),
+      );
     }
 
     if (provider.sortIndex !== undefined) {
@@ -1014,6 +1110,7 @@ function App() {
               onOpenChange={() => setCurrentView("providers")}
               onImportSuccess={handleImportSuccess}
               defaultTab={settingsDefaultTab}
+              usageDefaultFilter={usageDefaultFilter}
             />
           );
         case "prompts":
@@ -1081,6 +1178,14 @@ function App() {
           );
         case "workspace":
           return <WorkspaceFilesPanel />;
+        case "copilotTargets":
+          return (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden px-1 pb-12 pt-4">
+                <CopilotByokSettings mode="targets" />
+              </div>
+            </div>
+          );
         case "openclawEnv":
           return <EnvPanel />;
         case "openclawTools":
@@ -1088,9 +1193,37 @@ function App() {
         case "openclawAgents":
           return <AgentsDefaultsPanel />;
         default:
+          if (activeApp === "copilot-byok") {
+            return (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden px-1 pb-12">
+                  <CopilotByokSettings
+                    ref={copilotByokRef}
+                    mode="catalog"
+                    onOpenWebsite={handleOpenWebsite}
+                  />
+                </div>
+              </div>
+            );
+          }
+          if (activeApp === "copilot-cli") {
+            return (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden px-1 pb-12 pt-4">
+                  <CopilotCliSettings
+                    ref={copilotCliRef}
+                    onOpenWebsite={handleOpenWebsite}
+                  />
+                </div>
+              </div>
+            );
+          }
           return (
             <div className="px-6 flex flex-col flex-1 min-h-0 overflow-hidden">
-              <div className="flex-1 overflow-y-auto overflow-x-hidden pb-12 px-1">
+              <div
+                ref={providerScrollContainerRef}
+                className="flex-1 overflow-y-auto overflow-x-hidden pb-12 px-1"
+              >
                 <AnimatePresence mode="wait">
                   <motion.div
                     key={activeApp}
@@ -1125,7 +1258,8 @@ function App() {
                         activeApp === "opencode" ||
                         activeApp === "openclaw" ||
                         activeApp === "hermes" ||
-                        activeApp === "pi"
+                        activeApp === "pi" ||
+                        activeApp === "mcode"
                           ? (provider) =>
                               setConfirmAction({ provider, action: "remove" })
                           : undefined
@@ -1165,7 +1299,7 @@ function App() {
       <AnimatePresence mode="wait">
         <motion.div
           key={currentView}
-          className="flex-1 min-h-0"
+          className="flex flex-1 min-h-0 flex-col"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -1277,12 +1411,13 @@ function App() {
             className="flex items-center gap-1"
             style={{ WebkitAppRegion: "no-drag" } as any}
           >
-            {currentView !== "providers" ? (
+            {!isPrimaryView ? (
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
                   size="icon"
                   disabled={managementBusy}
+                  aria-label={t("common.back")}
                   onClick={() =>
                     setCurrentView(
                       currentView === "skillsDiscovery"
@@ -1300,9 +1435,11 @@ function App() {
                 <h1 className="text-lg font-semibold">
                   {currentView === "settings" && t("settings.title")}
                   {currentView === "prompts" &&
-                    t("prompts.title", {
-                      appName: t(`apps.${sharedFeatureApp}`),
-                    })}
+                    (sharedFeatureApp === "copilot-cli"
+                      ? t("copilotByok.cli.instructions")
+                      : t("prompts.title", {
+                          appName: t(`apps.${sharedFeatureApp}`),
+                        }))}
                   {currentView === "skills" && t("skills.title")}
                   {currentView === "skillsDiscovery" && t("skills.title")}
                   {currentView === "mcp" && t("mcp.unifiedPanel.title")}
@@ -1313,6 +1450,7 @@ function App() {
                     })}
                   {currentView === "sessions" && t("sessionManager.title")}
                   {currentView === "workspace" && t("workspace.title")}
+                  {currentView === "copilotTargets" && t("copilotByok.targets")}
                   {currentView === "openclawEnv" && t("openclaw.env.title")}
                   {currentView === "openclawTools" && t("openclaw.tools.title")}
                   {currentView === "openclawAgents" &&
@@ -1352,6 +1490,10 @@ function App() {
                     variant="ghost"
                     size="icon"
                     onClick={() => {
+                      setUsageDefaultFilter({
+                        appType: "all",
+                        revision: Date.now(),
+                      });
                       setSettingsDefaultTab("usage");
                       setCurrentView("settings");
                     }}
@@ -1377,18 +1519,29 @@ function App() {
                   {activeApp === "claude-desktop" ? (
                     <ClaudeDesktopRouteToggle />
                   ) : proxyAppId ? (
-                    <>
-                      {settingsData?.enableLocalProxy && (
-                        <ProxyToggle activeApp={proxyAppId} />
-                      )}
-                      {settingsData?.enableFailoverToggle && (
-                        <FailoverToggle activeApp={proxyAppId} />
-                      )}
-                    </>
+                    // 设置里选了 Stack 模式：Claude Code、Codex 的开关换成 Stack 模式开关（不做
+                    // 故障转移），其余应用仍显示路由开关。
+                    settingsData?.enableStackMode &&
+                    isStackAppId(proxyAppId) ? (
+                      <ProxyToggle activeApp={proxyAppId} stack />
+                    ) : (
+                      <>
+                        {(settingsData?.enableLocalProxy ||
+                          settingsData?.enableStackMode) && (
+                          <ProxyToggle activeApp={proxyAppId} />
+                        )}
+                        {settingsData?.enableFailoverToggle && (
+                          <FailoverToggle activeApp={proxyAppId} />
+                        )}
+                      </>
+                    )
                   ) : null}
                 </div>
               )}
             {currentView === "providers" &&
+              activeApp !== "mcode" &&
+              activeApp !== "copilot-byok" &&
+              activeApp !== "copilot-cli" &&
               (settingsData?.showProfileSwitcher ?? true) && (
                 <div
                   className="flex shrink-0 items-center"
@@ -1400,10 +1553,13 @@ function App() {
             {/* 弹性中段：空间不足时由 AppSwitcher 自行收纳溢出应用；
                 justify-end + overflow-hidden 只裁剪 resize 瞬间的过渡帧 */}
             <div className="flex flex-1 min-w-0 items-center justify-end overflow-hidden py-4">
-              {currentView === "providers" && (
+              {isPrimaryView && (
                 <AppSwitcher
                   activeApp={activeApp}
-                  onSwitch={setActiveApp}
+                  onSwitch={(app) => {
+                    setActiveApp(app);
+                    setCurrentView("providers");
+                  }}
                   visibleApps={visibleApps}
                 />
               )}
@@ -1566,13 +1722,15 @@ function App() {
                       <AnimatePresence mode="wait">
                         <motion.div
                           key={
-                            activeApp === "openclaw"
-                              ? "openclaw"
-                              : activeApp === "hermes"
-                                ? "hermes"
-                                : activeApp === "grokbuild"
-                                  ? "grokbuild"
-                                  : "default"
+                            primaryToolbarApp === "copilot-byok"
+                              ? "copilot"
+                              : primaryToolbarApp === "openclaw"
+                                ? "openclaw"
+                                : primaryToolbarApp === "hermes"
+                                  ? "hermes"
+                                  : primaryToolbarApp === "grokbuild"
+                                    ? "grokbuild"
+                                    : "default"
                           }
                           className="flex items-center gap-1"
                           initial={{ opacity: 0 }}
@@ -1580,7 +1738,7 @@ function App() {
                           exit={{ opacity: 0 }}
                           transition={{ duration: 0.15 }}
                         >
-                          {activeApp === "hermes" ? (
+                          {primaryToolbarApp === "hermes" ? (
                             <>
                               <Button
                                 variant="ghost"
@@ -1589,7 +1747,7 @@ function App() {
                                 className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
                                 title={t("skills.manage")}
                               >
-                                <Wrench className="w-4 h-4" />
+                                <SkillsIcon className="w-4 h-4" />
                               </Button>
                               <Button
                                 variant="ghost"
@@ -1621,7 +1779,7 @@ function App() {
                                 </Button>
                               )}
                             </>
-                          ) : activeApp === "openclaw" ? (
+                          ) : primaryToolbarApp === "openclaw" ? (
                             <>
                               <Button
                                 variant="ghost"
@@ -1671,10 +1829,25 @@ function App() {
                             </>
                           ) : (
                             <>
+                              {primaryToolbarApp === "copilot-byok" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    setCurrentView("copilotTargets")
+                                  }
+                                  className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
+                                  title={t("copilotByok.targets")}
+                                >
+                                  <Cpu className="w-4 h-4" />
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setCurrentView("skills")}
+                                onClick={() => {
+                                  setCurrentView("skills");
+                                }}
                                 className={cn(
                                   "text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5",
                                   "transition-all duration-200 ease-in-out overflow-hidden",
@@ -1684,21 +1857,29 @@ function App() {
                                 )}
                                 title={t("skills.manage")}
                               >
-                                <Wrench className="flex-shrink-0 w-4 h-4" />
+                                <SkillsIcon className="flex-shrink-0 w-4 h-4" />
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setCurrentView("prompts")}
+                                onClick={() => {
+                                  setCurrentView("prompts");
+                                }}
                                 className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
-                                title={t("prompts.manage")}
+                                title={
+                                  primaryToolbarApp === "copilot-cli"
+                                    ? t("copilotByok.cli.instructions")
+                                    : t("prompts.manage")
+                                }
                               >
                                 <Book className="w-4 h-4" />
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setCurrentView("sessions")}
+                                onClick={() => {
+                                  setCurrentView("sessions");
+                                }}
                                 className={cn(
                                   "text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5",
                                   "transition-all duration-200 ease-in-out overflow-hidden",
@@ -1728,7 +1909,15 @@ function App() {
                     </div>
 
                     <Button
-                      onClick={() => setIsAddOpen(true)}
+                      onClick={() => {
+                        if (activeApp === "copilot-byok") {
+                          copilotByokRef.current?.openAdd();
+                        } else if (activeApp === "copilot-cli") {
+                          copilotCliRef.current?.openAdd();
+                        } else {
+                          setIsAddOpen(true);
+                        }
+                      }}
                       size="icon"
                       className={`ml-2 ${addActionButtonClass}`}
                       aria-label={t("provider.addNewProvider")}
@@ -1744,7 +1933,10 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in">
+      <main
+        ref={mainScrollRef}
+        className="flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in"
+      >
         {isOpenClawView && openclawHealthWarnings.length > 0 && (
           <OpenClawHealthBanner warnings={openclawHealthWarnings} />
         )}

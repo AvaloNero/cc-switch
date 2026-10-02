@@ -32,7 +32,7 @@ interface OpenClawDefaultModelOption {
 }
 
 interface ProviderActionsProps {
-  appId?: AppId;
+  appId?: AppId | "copilot-byok";
   isCurrent: boolean;
   isInConfig?: boolean;
   isTesting?: boolean;
@@ -43,6 +43,7 @@ interface ProviderActionsProps {
   onDuplicate?: () => void;
   onTest?: () => void;
   onConfigureUsage?: () => void;
+  configureUsageTitle?: string;
   onDelete: () => void;
   onRemoveFromConfig?: () => void;
   onDisableOmo?: () => void;
@@ -50,13 +51,20 @@ interface ProviderActionsProps {
   isAutoFailoverEnabled?: boolean;
   isInFailoverQueue?: boolean;
   onToggleFailover?: (enabled: boolean) => void;
+  // Stack 模式：主按钮是添加 / 移除，已添加的另有「设为默认」（onSwitch）。onToggleStack
+  // 为空的（官方账号）不能添加，只能设为默认。
+  isStackMode?: boolean;
+  isStackMember?: boolean;
+  onToggleStack?: (enabled: boolean) => void;
   isOfficialBlockedByProxy?: boolean;
   // Hermes v12+ providers: dict overlay — edit/delete must go through Web UI
   isReadOnly?: boolean;
   // OpenClaw: default model
   isDefaultModel?: boolean;
   isRemovalProtected?: boolean;
+  isDeletionProtected?: boolean;
   isStateChangeProtected?: boolean;
+  hideMainActionWhenCurrent?: boolean;
   defaultModelOptions?: OpenClawDefaultModelOption[];
   onSetAsDefault?: (modelId?: string) => void;
 }
@@ -85,6 +93,7 @@ export function ProviderActions({
   onDuplicate,
   onTest,
   onConfigureUsage,
+  configureUsageTitle,
   onDelete,
   onRemoveFromConfig,
   onDisableOmo,
@@ -92,12 +101,17 @@ export function ProviderActions({
   isAutoFailoverEnabled = false,
   isInFailoverQueue = false,
   onToggleFailover,
+  isStackMode = false,
+  isStackMember = false,
+  onToggleStack,
   isOfficialBlockedByProxy = false,
   isReadOnly = false,
   // OpenClaw: default model
   isDefaultModel = false,
   isRemovalProtected = false,
+  isDeletionProtected = false,
   isStateChangeProtected = false,
+  hideMainActionWhenCurrent = false,
   defaultModelOptions = [],
   onSetAsDefault,
 }: ProviderActionsProps) {
@@ -106,14 +120,25 @@ export function ProviderActions({
 
   // Additive provider membership: providers can coexist in the native config.
   const isAdditiveMode =
-    Boolean(appId && isAdditiveAppId(appId)) &&
-    !(appId === "opencode" && isOmo);
+    (Boolean(appId && isAdditiveAppId(appId)) &&
+      !(appId === "opencode" && isOmo)) ||
+    appId === "copilot-byok";
 
   // 故障转移模式下的按钮逻辑（累加模式和 OMO 应用不支持故障转移）
   const isFailoverMode =
     !isAdditiveMode && !isOmo && isAutoFailoverEnabled && onToggleFailover;
   const isMembershipMode = isAdditiveMode;
   const piStateChangeHint = t("pi.current.stateUnavailableHint");
+  const canStack = isStackMode && onToggleStack !== undefined;
+
+  // 「设为默认 / 当前默认」按钮（OpenClaw、Hermes 的默认模型，Stack 模式的默认供应商）
+  const defaultButtonClassName = (isDefault: boolean) =>
+    cn(
+      "w-fit px-2.5",
+      isDefault
+        ? "bg-gray-200 text-muted-foreground dark:bg-gray-700 opacity-60 cursor-not-allowed"
+        : "bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700",
+    );
 
   const handleMainButtonClick = () => {
     if (isOmo) {
@@ -122,6 +147,9 @@ export function ProviderActions({
       } else {
         onSwitch();
       }
+    } else if (canStack) {
+      // Stack 模式：添加 / 移除（默认那家的移除按钮是禁用的）
+      onToggleStack?.(!isStackMember);
     } else if (isMembershipMode) {
       // 累加模式：切换配置状态（添加/移除）
       if (isInConfig) {
@@ -189,6 +217,7 @@ export function ProviderActions({
           ),
           icon: <Minus className="h-4 w-4" />,
           text: t("provider.removeFromConfig", { defaultValue: "移除" }),
+          title: isRemovalProtected ? t("provider.inUse") : undefined,
         };
       }
       return {
@@ -201,6 +230,44 @@ export function ProviderActions({
           appId === "pi"
             ? t("provider.enable", { defaultValue: "启用" })
             : t("provider.addToConfig", { defaultValue: "添加" }),
+      };
+    }
+
+    // Stack 模式：已添加的可以移除（默认那家除外），没添加的可以添加
+    if (canStack) {
+      if (isStackMember) {
+        return {
+          disabled: isCurrent,
+          variant: "secondary" as const,
+          className: cn(
+            "bg-orange-100 text-orange-600 hover:bg-orange-200 dark:bg-orange-900/50 dark:text-orange-400 dark:hover:bg-orange-900/70",
+            isCurrent && "opacity-40 cursor-not-allowed",
+          ),
+          icon: <Minus className="h-4 w-4" />,
+          text: t("provider.removeFromConfig", { defaultValue: "移除" }),
+          title: isCurrent ? t("provider.stackDefaultCannotRemove") : undefined,
+        };
+      }
+      return {
+        disabled: false,
+        variant: "default" as const,
+        className:
+          "bg-emerald-500 hover:bg-emerald-600 dark:bg-emerald-600 dark:hover:bg-emerald-700",
+        icon: <Plus className="h-4 w-4" />,
+        text: t("provider.addToConfig", { defaultValue: "添加" }),
+      };
+    }
+
+    // Stack 模式下不能添加的（官方账号）只能设为默认
+    if (isStackMode && !isOfficialBlockedByProxy) {
+      return {
+        disabled: isCurrent,
+        variant: isCurrent ? ("secondary" as const) : ("default" as const),
+        className: defaultButtonClassName(isCurrent),
+        icon: <Zap className="h-4 w-4" />,
+        text: isCurrent
+          ? t("provider.isDefault", { defaultValue: "当前默认" })
+          : t("provider.setAsDefault", { defaultValue: "设为默认" }),
       };
     }
 
@@ -261,6 +328,7 @@ export function ProviderActions({
   const buttonState = getMainButtonState();
   const canDelete =
     !isReadOnly &&
+    !isDeletionProtected &&
     (appId === "pi"
       ? !isStateChangeProtected
       : isOmo || isAdditiveMode
@@ -269,8 +337,9 @@ export function ProviderActions({
   const readOnlyHint = t("provider.managedByHermesHint", {
     defaultValue: "由 Hermes 管理，请在 Hermes Web UI 中编辑",
   });
-  const deleteHint =
-    appId === "pi" && isStateChangeProtected
+  const deleteHint = isDeletionProtected
+    ? t("provider.inUse")
+    : appId === "pi" && isStateChangeProtected
       ? piStateChangeHint
       : isReadOnly
         ? readOnlyHint
@@ -290,12 +359,6 @@ export function ProviderActions({
             appId === "hermes"
               ? t("provider.enable", { defaultValue: "启用" })
               : t("provider.setAsDefault", { defaultValue: "设为默认" });
-          const defaultButtonClassName = cn(
-            "w-fit px-2.5",
-            isDefaultModel
-              ? "bg-gray-200 text-muted-foreground dark:bg-gray-700 opacity-60 cursor-not-allowed"
-              : "bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700",
-          );
 
           if (
             appId === "openclaw" &&
@@ -308,7 +371,7 @@ export function ProviderActions({
                   <Button
                     size="sm"
                     variant="default"
-                    className={defaultButtonClassName}
+                    className={defaultButtonClassName(isDefaultModel)}
                   >
                     <Zap className="h-4 w-4" />
                     {inactiveLabel}
@@ -355,7 +418,7 @@ export function ProviderActions({
                   : () => onSetAsDefault(defaultModelOptions[0]?.id)
               }
               disabled={isDefaultModel}
-              className={defaultButtonClassName}
+              className={defaultButtonClassName(isDefaultModel)}
             >
               <Zap className="h-4 w-4" />
               {isDefaultModel ? activeLabel : inactiveLabel}
@@ -363,26 +426,43 @@ export function ProviderActions({
           );
         })()}
 
-      {/* disabled:pointer-events-none prevents the native title from firing,
-          so the wrapper owns the explanatory tooltip and cursor. */}
-      <span
-        title={buttonState.title}
-        className={cn(
-          "inline-flex",
-          buttonState.disabled && "cursor-not-allowed",
-        )}
-      >
+      {canStack && isStackMember && (
         <Button
           size="sm"
-          variant={buttonState.variant}
-          onClick={handleMainButtonClick}
-          disabled={buttonState.disabled}
-          className={cn("w-[4.5rem] px-2.5", buttonState.className)}
+          variant={isCurrent ? "secondary" : "default"}
+          onClick={isCurrent ? undefined : onSwitch}
+          disabled={isCurrent}
+          className={defaultButtonClassName(isCurrent)}
         >
-          {buttonState.icon}
-          {buttonState.text}
+          <Zap className="h-4 w-4" />
+          {isCurrent
+            ? t("provider.isDefault", { defaultValue: "当前默认" })
+            : t("provider.setAsDefault", { defaultValue: "设为默认" })}
         </Button>
-      </span>
+      )}
+
+      {/* disabled:pointer-events-none prevents the native title from firing,
+          so the wrapper owns the explanatory tooltip and cursor. */}
+      {!(hideMainActionWhenCurrent && isCurrent) && (
+        <span
+          title={buttonState.title}
+          className={cn(
+            "inline-flex",
+            buttonState.disabled && "cursor-not-allowed",
+          )}
+        >
+          <Button
+            size="sm"
+            variant={buttonState.variant}
+            onClick={handleMainButtonClick}
+            disabled={buttonState.disabled}
+            className={cn("w-[4.5rem] px-2.5", buttonState.className)}
+          >
+            {buttonState.icon}
+            {buttonState.text}
+          </Button>
+        </span>
+      )}
 
       <div className="flex items-center gap-1">
         <Button
@@ -433,8 +513,8 @@ export function ProviderActions({
         <Button
           size="icon"
           variant="ghost"
-          onClick={onConfigureUsage || undefined}
-          title={t("provider.configureUsage")}
+          onClick={onConfigureUsage ? () => onConfigureUsage() : undefined}
+          title={configureUsageTitle ?? t("provider.configureUsage")}
           className={cn(
             iconButtonClass,
             !onConfigureUsage &&

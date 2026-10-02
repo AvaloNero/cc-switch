@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -27,7 +27,13 @@ import {
   OPENCODE_EXTRA_OPTION_DRAFT_PREFIX,
 } from "./helpers/opencodeFormUtils";
 import { RequestHeadersEditor } from "./RequestHeadersEditor";
+import { FetchedModelPicker } from "./FetchedModelPicker";
 import type { ProviderCategory, OpenCodeModel } from "@/types";
+import { useCommittableRef } from "@/hooks/useLatestRef";
+import { useModelMetadataFill } from "@/hooks/useModelMetadataFill";
+import type { PresetModelSource } from "@/lib/modelMetadata";
+import { opencodePresetModelSources } from "@/config/presetModelMetadata";
+import { fillOpenCodeModel, metadataFilledAnything } from "./modelMetadataFill";
 
 /**
  * Model ID input with local state to prevent focus loss.
@@ -154,6 +160,10 @@ function ModelOptionKeyInput({
 }
 
 interface OpenCodeFormFieldsProps {
+  allowBuiltinDefaults?: boolean;
+  /** 选中拉取到的模型时补参数所查的预设（MiniMax Code 传自己的）。 */
+  presetModelSources?: () => readonly PresetModelSource[];
+  apiFormats?: ReadonlyArray<{ value: string; label: string }>;
   // NPM Package
   npm: string;
   onNpmChange: (value: string) => void;
@@ -185,6 +195,9 @@ interface OpenCodeFormFieldsProps {
 }
 
 export function OpenCodeFormFields({
+  allowBuiltinDefaults = false,
+  presetModelSources = opencodePresetModelSources,
+  apiFormats = opencodeNpmPackages,
   npm,
   onNpmChange,
   apiKey,
@@ -207,6 +220,16 @@ export function OpenCodeFormFields({
 
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const modelFetchGeneration = useRef(0);
+
+  useEffect(() => {
+    setFetchedModels((prev) => (prev.length === 0 ? prev : []));
+    setIsFetchingModels(false);
+    return () => {
+      // Ignore responses for a previous endpoint/key or an unmounted form.
+      modelFetchGeneration.current += 1;
+    };
+  }, [baseUrl, apiKey]);
 
   const handleFetchModels = useCallback(() => {
     if (!baseUrl || !apiKey) {
@@ -216,9 +239,15 @@ export function OpenCodeFormFields({
       });
       return;
     }
+    const generation = ++modelFetchGeneration.current;
+    setFetchedModels([]);
     setIsFetchingModels(true);
     fetchModelsForConfig(baseUrl, apiKey)
-      .then((models) => {
+      .then((result) => {
+        if (generation !== modelFetchGeneration.current) return;
+        const models = [
+          ...new Map(result.map((model) => [model.id, model])).values(),
+        ];
         setFetchedModels(models);
         if (models.length === 0) {
           toast.info(t("providerForm.fetchModelsEmpty"));
@@ -229,10 +258,15 @@ export function OpenCodeFormFields({
         }
       })
       .catch((err) => {
+        if (generation !== modelFetchGeneration.current) return;
         console.warn("[ModelFetch] Failed:", err);
         showFetchModelsError(err, t);
       })
-      .finally(() => setIsFetchingModels(false));
+      .finally(() => {
+        if (generation === modelFetchGeneration.current) {
+          setIsFetchingModels(false);
+        }
+      });
   }, [baseUrl, apiKey, t]);
 
   // Track which models have expanded options panel
@@ -255,6 +289,34 @@ export function OpenCodeFormFields({
       ...models,
       [newKey]: { name: "" },
     });
+  };
+
+  // 选中拉取到的模型时补上它已知的 limit 和模态（只补空着的）。
+  // 补全可能晚到，要用最新的列表和回调提交。
+  const [modelsRef, commitModels] = useCommittableRef(models, onModelsChange);
+  const fillModelMetadata = useModelMetadataFill({
+    baseUrl,
+    presets: presetModelSources,
+    prefetch: fetchedModels.length > 0,
+  });
+  const fillModelMetadataFor = (id: string) =>
+    fillModelMetadata(id, (metadata) => {
+      const current = modelsRef.current;
+      if (!Object.prototype.hasOwnProperty.call(current, id)) return false;
+      const filled = fillOpenCodeModel(current[id], metadata);
+      if (!metadataFilledAnything(current[id], filled)) return false;
+      commitModels({ ...current, [id]: filled });
+      return true;
+    });
+
+  const handleAddFetchedModels = (modelIds: string[]) => {
+    const additions = Object.fromEntries(
+      modelIds
+        .filter((id) => !Object.prototype.hasOwnProperty.call(models, id))
+        .map((id) => [id, { name: id }]),
+    );
+    commitModels({ ...models, ...additions });
+    Object.keys(additions).forEach(fillModelMetadataFor);
   };
 
   // Remove a model entry
@@ -281,7 +343,7 @@ export function OpenCodeFormFields({
         newModels[k] = v;
       }
     }
-    onModelsChange(newModels);
+    commitModels(newModels);
     // Update expanded set if this model was expanded
     if (expandedModels.has(oldKey)) {
       setExpandedModels((prev) => {
@@ -502,13 +564,17 @@ export function OpenCodeFormFields({
         <Select value={npm} onValueChange={onNpmChange}>
           <SelectTrigger id="opencode-npm">
             <SelectValue
-              placeholder={t("opencode.selectPackage", {
-                defaultValue: "Select a package",
-              })}
+              placeholder={
+                allowBuiltinDefaults
+                  ? t("opencode.builtinDefaults")
+                  : t("opencode.selectPackage", {
+                      defaultValue: "Select a package",
+                    })
+              }
             />
           </SelectTrigger>
           <SelectContent>
-            {opencodeNpmPackages.map((pkg) => (
+            {apiFormats.map((pkg) => (
               <SelectItem key={pkg.value} value={pkg.value}>
                 {pkg.label}
               </SelectItem>
@@ -676,6 +742,14 @@ export function OpenCodeFormFields({
           </div>
         </div>
 
+        {fetchedModels.length > 0 && (
+          <FetchedModelPicker
+            models={fetchedModels}
+            configuredModelIds={Object.keys(models)}
+            onAdd={handleAddFetchedModels}
+          />
+        )}
+
         {Object.keys(models).length === 0 ? (
           <p className="text-sm text-muted-foreground py-2">
             {t("opencode.noModels", {
@@ -726,7 +800,10 @@ export function OpenCodeFormFields({
                     {fetchedModels.length > 0 && (
                       <ModelDropdown
                         models={fetchedModels}
-                        onSelect={(id) => handleModelIdChange(key, id)}
+                        onSelect={(id) => {
+                          handleModelIdChange(key, id);
+                          fillModelMetadataFor(id);
+                        }}
                       />
                     )}
                   </div>

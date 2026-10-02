@@ -16,6 +16,7 @@ import type {
   OpenClawDefaultModel,
 } from "@/types";
 import type { OpenClawSuggestedDefaults } from "@/config/openclawProviderPresets";
+import type { ProviderEditorSave } from "@/lib/api/providers";
 import { injectCodingPlanUsageScript } from "@/config/codingPlanProviders";
 import {
   useAddProviderMutation,
@@ -90,6 +91,7 @@ export function useProviderActions(
         addToLive?: boolean;
         ensureClaudeDesktopOfficialSeed?: boolean;
         ensureGrokBuildOfficialSeed?: boolean;
+        editorSave?: ProviderEditorSave;
       },
     ) => {
       const enhanced = injectCodingPlanUsageScript(activeApp, provider);
@@ -146,10 +148,15 @@ export function useProviderActions(
 
   // 更新供应商
   const updateProvider = useCallback(
-    async (provider: Provider, originalId?: string) => {
+    async (
+      provider: Provider,
+      originalId?: string,
+      editorSave?: ProviderEditorSave,
+    ) => {
       await updateProviderMutation.mutateAsync({
         provider,
         originalId,
+        editorSave,
       });
 
       // 更新托盘菜单（失败不影响主操作）
@@ -298,15 +305,34 @@ export function useProviderActions(
         const result = await switchProviderMutation.mutateAsync(provider.id);
         await syncClaudePlugin(provider);
 
-        // Show backfill warning if present
+        // Surface switch warnings by code — a generic "backfill failed"
+        // message for an auth-cleanup warning would point the user at the
+        // wrong problem entirely.
         if (result?.warnings?.length) {
-          toast.warning(
-            t("notifications.backfillWarning", {
-              defaultValue:
-                "切换成功，但旧供应商配置回填失败，您手动修改的配置可能未保存",
-            }),
-            { duration: 5000 },
+          const authCleanupFailed = result.warnings.some((warning) =>
+            warning.startsWith("codex_auth_cleanup_failed"),
           );
+          const hasOtherWarnings = result.warnings.some(
+            (warning) => !warning.startsWith("codex_auth_cleanup_failed"),
+          );
+          if (authCleanupFailed) {
+            toast.warning(
+              t("notifications.codexAuthCleanupFailed", {
+                defaultValue:
+                  "切换成功，但未能删除 auth.json，官方登录凭据仍留在磁盘上；如需彻底移除请手动删除 Codex 配置目录中的 auth.json",
+              }),
+              { duration: 6000 },
+            );
+          }
+          if (hasOtherWarnings) {
+            toast.warning(
+              t("notifications.backfillWarning", {
+                defaultValue:
+                  "切换成功，但旧供应商配置回填失败，您手动修改的配置可能未保存",
+              }),
+              { duration: 5000 },
+            );
+          }
         }
 
         // 若已弹过 proxyRequired 警告则不再弹 success
@@ -316,6 +342,9 @@ export function useProviderActions(
           if (activeApp === "codex") {
             messageKey = "notifications.codexRestartRequired";
             defaultMessage = "切换成功，请重启客户端以生效";
+          } else if (activeApp === "gemini") {
+            messageKey = "notifications.geminiRestartRequired";
+            defaultMessage = "切换成功，请重启 Gemini CLI 以生效";
           } else if (activeApp === "grokbuild") {
             messageKey = "notifications.grokBuildRestartRequired";
             defaultMessage = "切换成功，请重启 Grok Build 以生效";
@@ -328,7 +357,11 @@ export function useProviderActions(
               messageKey = "notifications.claudeDesktopRestartRequired";
               defaultMessage = "切换成功，重启 Claude Desktop 后生效";
             }
-          } else if (activeApp === "opencode" || activeApp === "openclaw") {
+          } else if (
+            activeApp === "opencode" ||
+            activeApp === "openclaw" ||
+            activeApp === "mcode"
+          ) {
             messageKey = "notifications.addToConfigSuccess";
             defaultMessage = "已添加到配置";
           }

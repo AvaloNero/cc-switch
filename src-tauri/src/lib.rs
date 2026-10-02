@@ -9,18 +9,24 @@ mod codex_history_migration;
 mod codex_state_db;
 mod commands;
 mod config;
+mod copilot_byok;
 mod database;
 mod deeplink;
 mod error;
+mod file_transaction;
 mod gemini_config;
 mod gemini_mcp;
 mod grok_config;
 pub mod hermes_config;
 mod init_status;
+mod jsonc_document;
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
+pub mod live;
+mod mcode_config;
 mod mcp;
+pub mod mode;
 mod model_capabilities;
 mod openclaw_config;
 mod opencode_config;
@@ -41,7 +47,8 @@ mod usage_script;
 
 pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
 pub use codex_config::{
-    get_codex_auth_path, get_codex_config_path, read_codex_live_settings, write_codex_live_atomic,
+    extract_codex_experimental_bearer_token, get_codex_auth_path, get_codex_config_path,
+    read_codex_live_settings, write_codex_live_atomic,
 };
 pub use commands::open_provider_terminal;
 pub use commands::*;
@@ -61,7 +68,7 @@ pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use services::{
     profile::{ProfilePayload, ProfileScope, ProfileService},
-    provider::reapply_current_codex_official_live,
+    provider::{reapply_current_codex_official_live, EditorSave, EditorView},
     skill::{migrate_skills_to_ssot, ImportSkillSelection},
     ConfigService, EndpointLatency, McpService, PromptService, ProviderService, ProxyService,
     SkillService, SpeedtestService,
@@ -274,6 +281,10 @@ fn handle_deeplink_url(
 
             if focus_main_window {
                 if let Some(window) = app.get_webview_window("main") {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = window.set_skip_taskbar(false);
+                    }
                     let _ = window.unminimize();
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -375,6 +386,13 @@ pub fn run() {
 
             // Show and focus window regardless
             if let Some(window) = app.get_webview_window("main") {
+                // 防御性重置 Windows 的 skip_taskbar：single_instance 触发时，
+                // 原进程可能因 silent_startup / 关闭到托盘等处于 skip_taskbar(true) 状态，
+                // 仅 show() 不会重置该状态，会导致窗口可见但不在任务栏、最小化后消失。
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window.set_skip_taskbar(false);
+                }
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -579,6 +597,10 @@ pub fn run() {
                     });
                     // 主窗口默认 visible:false，恢复界面必须强制显示
                     if let Some(window) = app.get_webview_window("main") {
+                        #[cfg(target_os = "windows")]
+                        {
+                            let _ = window.set_skip_taskbar(false);
+                        }
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
@@ -653,6 +675,10 @@ pub fn run() {
             // 设置 AppHandle 用于代理故障转移时的 UI 更新
             app_state.proxy_service.set_app_handle(app.handle().clone());
 
+            // 补完上次崩溃时写到一半的客户端文件（写前意图在 ~/.cc-switch/live-state.json），
+            // 要在任何写客户端文件的启动步骤之前。
+            crate::mode::operation::recover_on_startup(&app_state.db);
+
             // ============================================================
             // 按表独立判断的导入逻辑（各类数据独立检查，互不影响）
             // ============================================================
@@ -711,7 +737,7 @@ pub fn run() {
             //
             // 先 import 后 seed 是有意为之：先把用户手动配置的 settings.json / auth.json / .env
             // 落成 "default" provider 设为 current，再追加官方预设（is_current=false）。
-            // 这样用户切到官方预设时，回填机制会保护原 live 配置不丢失。
+            // 降级回旧版时，旧版的回填和整份写入仍靠这一行保住用户原来的 live 配置。
             //
             // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 CC Switch 的工作方式。
             // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
@@ -722,7 +748,14 @@ pub fn run() {
                 app_state.db.is_providers_empty().unwrap_or(false);
 
             for app_type in
-                crate::app_config::AppType::all().filter(|t| !t.is_additive_mode())
+                crate::app_config::AppType::all().filter(|t| {
+                    !t.is_additive_mode()
+                        && !matches!(
+                            t,
+                            crate::app_config::AppType::CopilotByok
+                                | crate::app_config::AppType::CopilotCli
+                        )
+                })
             {
                 if !crate::services::provider::should_import_default_config_on_startup(
                     &app_state,
@@ -871,6 +904,15 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to import Pi providers: {e}"),
             }
 
+            // Re-project the managed Copilot catalog on every launch. VS Code does
+            // not expose SecretStorage to external applications, so newer CC Switch
+            // versions may need to repair derived per-model authentication headers
+            // even when the catalog itself has not changed.
+            match crate::copilot_byok::sync_selected_on_startup(app_state.db.as_ref()) {
+                Ok(()) => log::debug!("✓ Synchronized Copilot BYOK profiles"),
+                Err(e) => log::warn!("✗ Failed to synchronize Copilot BYOK profiles: {e}"),
+            }
+
             // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
             {
                 let has_omo = app_state
@@ -985,9 +1027,11 @@ pub fn run() {
                     crate::app_config::AppType::Gemini,
                     crate::app_config::AppType::GrokBuild,
                     crate::app_config::AppType::OpenCode,
+                    crate::app_config::AppType::CopilotCli,
                     crate::app_config::AppType::OpenClaw,
                     crate::app_config::AppType::Hermes,
                     crate::app_config::AppType::Pi,
+                    crate::app_config::AppType::Mcode,
                 ] {
                     match crate::services::prompt::PromptService::import_from_file_on_first_launch(
                         &app_state,
@@ -1205,26 +1249,6 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
 
-                // 检查是否有 Live 备份（表示上次异常退出时可能处于接管状态）
-                let has_backups = match state.db.has_any_live_backup().await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        log::error!("检查 Live 备份失败: {e}");
-                        false
-                    }
-                };
-                // 检查 Live 配置是否仍处于被接管状态（包含占位符）
-                let live_taken_over = state.proxy_service.detect_takeover_in_live_configs();
-
-                if has_backups || live_taken_over {
-                    log::warn!("检测到上次异常退出（存在接管残留），正在恢复 Live 配置...");
-                    if let Err(e) = state.proxy_service.recover_from_crash().await {
-                        log::error!("恢复 Live 配置失败: {e}");
-                    } else {
-                        log::info!("Live 配置已恢复");
-                    }
-                }
-
                 // 必须排在 auto-extract 之前：先把历史泄漏进 Gemini 共享片段的凭据
                 // 清干净，否则紧接着的提取会基于被污染的 live 再写一遍。
                 if let Err(e) =
@@ -1238,8 +1262,13 @@ pub fn run() {
 
                 initialize_common_config_snippets(&state);
 
-                // 检查 settings 表中的代理状态，自动恢复代理服务
-                restore_proxy_state_on_startup(&state).await;
+                // 定下各应用的直连 / 代理模式（处理旧版遗留的接管状态），再把代理模式的
+                // 应用接上。要排在通用配置片段的自动提取之后：它读的是直连的 live。
+                crate::mode::controller::startup(&state).await;
+                // Codex 官方做路由、发布了 Stack 模型时，官方模型列表过期就在后台刷新。
+                crate::services::provider::codex_official_models::start_background_checks(
+                    state.inner().clone(),
+                );
 
                 // Periodic backup check (on startup)
                 if let Err(e) = state.db.periodic_backup_if_needed() {
@@ -1268,6 +1297,11 @@ pub fn run() {
                     const SESSION_SYNC_INTERVAL_SECS: u64 = 60;
 
                     async fn run_session_sync(db: std::sync::Arc<crate::database::Database>, backfill: bool) {
+                        // 手动扫描模式下跳过定时扫描；backfill 轮（启动首轮）仍进入，
+                        // 费用回填只修补数据库既有行（含代理记账行），不读会话文件
+                        if !backfill && !crate::settings::get_settings().session_auto_sync_enabled {
+                            return;
+                        }
                         let _guard = crate::services::session_usage::session_sync_mutex()
                             .lock()
                             .await;
@@ -1276,6 +1310,9 @@ pub fn run() {
                                 if let Err(error) = db.backfill_missing_usage_costs() {
                                     log::warn!("Usage cost startup backfill failed: {error}");
                                 }
+                            }
+                            if !crate::settings::get_settings().session_auto_sync_enabled {
+                                return crate::services::session_usage::SessionSyncResult::default();
                             }
                             crate::services::session_usage::sync_all_unlocked(&db)
                         });
@@ -1364,6 +1401,7 @@ pub fn run() {
             commands::get_current_provider,
             commands::add_provider,
             commands::update_provider,
+            commands::get_provider_editor_view,
             commands::delete_provider,
             commands::remove_provider_from_live_config,
             commands::switch_provider,
@@ -1390,7 +1428,6 @@ pub fn run() {
             commands::set_claude_common_config_snippet,
             commands::get_common_config_snippet,
             commands::set_common_config_snippet,
-            commands::update_toml_common_config_snippet,
             commands::extract_common_config_snippet,
             commands::read_live_provider_settings,
             commands::get_settings,
@@ -1469,7 +1506,8 @@ pub fn run() {
             commands::delete_profile,
             commands::clear_current_profile,
             commands::apply_profile,
-            // model list fetch (OpenAI-compatible /v1/models)
+            // Fetch OpenAI-compatible and Anthropic model lists. Response data structure:
+            // data[].id, data[]?.owned_by. Special: supports Zhipu OpenAI Responses models[].slug.
             commands::fetch_models_for_config,
             commands::get_opencode_models,
             // ours: endpoint speed test + custom endpoint management
@@ -1550,6 +1588,8 @@ pub fn run() {
             commands::stop_proxy_with_restore,
             commands::get_proxy_takeover_status,
             commands::set_proxy_takeover_for_app,
+            commands::exit_proxy_apps_in_mode,
+            commands::get_direct_provider,
             commands::get_proxy_status,
             commands::get_proxy_config,
             commands::update_proxy_config,
@@ -1558,13 +1598,14 @@ pub fn run() {
             commands::update_global_proxy_config,
             commands::get_proxy_config_for_app,
             commands::update_proxy_config_for_app,
-            commands::get_default_cost_multiplier,
-            commands::set_default_cost_multiplier,
             commands::get_pricing_model_source,
             commands::set_pricing_model_source,
             commands::is_proxy_running,
             commands::is_live_takeover_active,
             commands::switch_proxy_provider,
+            commands::get_proxy_stack,
+            commands::set_proxy_stack_member,
+            commands::restart_codex_app_server_daemon,
             // Proxy failover commands
             commands::get_provider_health,
             commands::reset_circuit_breaker,
@@ -1600,9 +1641,6 @@ pub fn run() {
             commands::get_usage_data_sources,
             // Stream health check
             commands::stream_check_provider,
-            commands::stream_check_all_providers,
-            commands::get_stream_check_config,
-            commands::save_stream_check_config,
             // Session manager
             commands::list_sessions,
             commands::get_session_messages,
@@ -1660,6 +1698,7 @@ pub fn run() {
             // Generic managed auth commands
             commands::auth_start_login,
             commands::auth_poll_for_account,
+            commands::auth_cancel_login,
             commands::auth_list_accounts,
             commands::auth_get_status,
             commands::auth_remove_account,
@@ -1681,6 +1720,31 @@ pub fn run() {
             commands::copilot_get_models_for_account,
             commands::copilot_get_usage,
             commands::copilot_get_usage_for_account,
+            // VS Code Copilot BYOK model catalog
+            commands::copilot_byok_get_state,
+            commands::copilot_cli_get_state,
+            commands::copilot_cli_preview_selection,
+            commands::copilot_byok_set_cli_selection,
+            commands::copilot_cli_set_selection,
+            commands::copilot_byok_disable_cli,
+            commands::copilot_cli_disable,
+            commands::copilot_cli_open_terminal,
+            commands::copilot_byok_update_usage_script,
+            commands::copilot_cli_update_usage_script,
+            commands::copilot_byok_set_targets,
+            commands::copilot_byok_add_custom_target,
+            commands::copilot_byok_remove_custom_target,
+            commands::copilot_byok_upsert_group,
+            commands::copilot_byok_delete_group,
+            commands::copilot_byok_reorder_groups,
+            commands::copilot_cli_upsert_group,
+            commands::copilot_cli_delete_group,
+            commands::copilot_cli_reorder_groups,
+            commands::copilot_byok_sync,
+            commands::copilot_byok_import_models,
+            commands::copilot_byok_restore_backup,
+            commands::copilot_byok_check_connection,
+            commands::copilot_cli_check_connection,
             // OMO commands
             commands::read_omo_local_file,
             commands::get_current_omo_provider_id,
@@ -1842,6 +1906,10 @@ pub fn run() {
 
                             // 确保主窗口可见
                             if let Some(window) = app_handle.get_webview_window("main") {
+                                #[cfg(target_os = "windows")]
+                                {
+                                    let _ = window.set_skip_taskbar(false);
+                                }
                                 let _ = window.unminimize();
                                 let _ = window.show();
                                 let _ = window.set_focus();
@@ -1866,43 +1934,12 @@ pub fn run() {
 
 /// 应用退出前的清理工作
 ///
-/// 在应用退出前检查代理服务器状态，如果正在运行则停止代理并恢复 Live 配置。
-/// 确保 Claude Code/Codex/Gemini 的配置不会处于损坏状态。
-/// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
+/// 把接上代理的客户端都指回直连（模式和代理路由保留，下次启动再接上），再停止代理。
+/// 客户端不能一直指着代理：开机自启默认关闭，CC Switch 一关客户端就连不上了。
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
     if let Some(state) = app_handle.try_state::<store::AppState>() {
-        let proxy_service = &state.proxy_service;
-
-        // 退出时也需要兜底：代理可能已崩溃/未运行，但 Live 接管残留仍在（占位符/备份）。
-        let has_backups = match state.db.has_any_live_backup().await {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("退出时检查 Live 备份失败: {e}");
-                false
-            }
-        };
-        let live_taken_over = proxy_service.detect_takeover_in_live_configs();
-        let needs_restore = has_backups || live_taken_over;
-
-        if needs_restore {
-            log::info!("检测到接管残留，开始恢复 Live 配置（保留代理状态）...");
-            // 使用 keep_state 版本，保留 settings 表中的代理状态
-            if let Err(e) = proxy_service.stop_with_restore_keep_state().await {
-                log::error!("退出时恢复 Live 配置失败: {e}");
-            } else {
-                log::info!("已恢复 Live 配置（代理状态已保留，下次启动将自动恢复）");
-            }
-            return;
-        }
-
-        // 非接管模式：代理在运行则仅停止代理
-        if proxy_service.is_running().await {
-            log::info!("检测到代理服务器正在运行，开始停止...");
-            if let Err(e) = proxy_service.stop().await {
-                log::error!("退出时停止代理失败: {e}");
-            }
-            log::info!("代理服务器清理完成");
-        }
+        crate::mode::controller::detach_all(state.inner()).await;
+        log::info!("退出清理完成：客户端已指回直连，代理已停止");
     }
 }
 
@@ -1926,76 +1963,20 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
     }
 }
 
-// ============================================================
-// 启动时恢复代理状态
-// ============================================================
-
-/// 启动时根据 proxy_config 表中的代理状态自动恢复代理服务
-///
-/// 检查 `proxy_config.enabled` 字段，如果有任一应用的状态为 `true`，
-/// 则自动启动代理服务并接管对应应用的 Live 配置。
-const PROXY_STARTUP_APP_TYPES: [&str; 4] = ["claude", "codex", "gemini", "grokbuild"];
-
-async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static str> {
-    let mut apps = Vec::new();
-    for app_type in PROXY_STARTUP_APP_TYPES {
-        if db
-            .get_proxy_config_for_app(app_type)
-            .await
-            .is_ok_and(|config| config.enabled)
-        {
-            apps.push(app_type);
-        }
-    }
-    apps
-}
-
-async fn restore_proxy_state_on_startup(state: &store::AppState) {
-    // 收集需要恢复接管的应用列表（从 proxy_config.enabled 读取）
-    let apps_to_restore = enabled_proxy_apps_on_startup(&state.db).await;
-
-    if apps_to_restore.is_empty() {
-        log::debug!("启动时无需恢复代理状态");
-        return;
-    }
-
-    log::info!("检测到上次代理状态需要恢复，应用列表: {apps_to_restore:?}");
-
-    // 逐个恢复接管状态
-    for app_type in apps_to_restore {
-        match state
-            .proxy_service
-            .set_takeover_for_app(app_type, true)
-            .await
-        {
-            Ok(()) => {
-                log::info!("✓ 已恢复 {app_type} 的代理接管状态");
-            }
-            Err(e) => {
-                log::error!("✗ 恢复 {app_type} 的代理接管状态失败: {e}");
-                // 失败时清除该应用的状态，避免下次启动再次尝试
-                if let Err(clear_err) = state
-                    .proxy_service
-                    .set_takeover_for_app(app_type, false)
-                    .await
-                {
-                    log::error!("清除 {app_type} 代理状态失败: {clear_err}");
-                }
-            }
-        }
-    }
-}
-
 fn initialize_common_config_snippets(state: &store::AppState) {
     // Auto-extract common config snippets from clean live files when snippet is missing.
-    // This must run before proxy takeover is restored on startup, otherwise we'd read
-    // proxy-placeholder configs instead of the user's actual live settings.
+    // This must run before proxy mode is re-attached on startup, otherwise we'd read
+    // proxy-placeholder configs instead of the user's actual live settings. A client
+    // still attached from an update restart (no detach on the way out) is skipped too.
     for app_type in crate::app_config::AppType::all() {
         if !state
             .db
             .should_auto_extract_config_snippet(app_type.as_str())
             .unwrap_or(false)
         {
+            continue;
+        }
+        if state.proxy_service.live_has_proxy_placeholder(&app_type) {
             continue;
         }
 
@@ -2271,11 +2252,9 @@ pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_exit_request, enabled_proxy_apps_on_startup, redact_url_for_log,
-        redact_url_for_log_with_secrets, redact_url_origin_for_log, runtime_log_level_allows,
-        ExitRequestAction,
+        classify_exit_request, redact_url_for_log, redact_url_for_log_with_secrets,
+        redact_url_origin_for_log, runtime_log_level_allows, ExitRequestAction,
     };
-    use crate::database::Database;
 
     #[test]
     fn log_url_redaction_strips_credentials_and_query_keeps_path() {
@@ -2381,22 +2360,5 @@ mod tests {
             classify_exit_request(Some(1)),
             ExitRequestAction::CleanupAndExit
         );
-    }
-
-    #[tokio::test]
-    async fn startup_restore_includes_enabled_grokbuild_route() {
-        let db = Database::memory().expect("initialize database");
-        let mut config = db
-            .get_proxy_config_for_app("grokbuild")
-            .await
-            .expect("read Grok Build proxy config");
-        config.enabled = true;
-        db.update_proxy_config_for_app(config)
-            .await
-            .expect("enable Grok Build proxy config");
-
-        let apps = enabled_proxy_apps_on_startup(&db).await;
-
-        assert_eq!(apps, vec!["grokbuild"]);
     }
 }

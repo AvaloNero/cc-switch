@@ -48,6 +48,12 @@ pub struct VisibleApps {
     pub hermes: bool,
     #[serde(default = "default_true")]
     pub pi: bool,
+    #[serde(default = "default_true")]
+    pub mcode: bool,
+    #[serde(default = "default_true")]
+    pub copilot_byok: bool,
+    #[serde(default = "default_true")]
+    pub copilot_cli: bool,
 }
 
 impl Default for VisibleApps {
@@ -62,6 +68,9 @@ impl Default for VisibleApps {
             openclaw: true,
             hermes: false, // 默认不显示，需用户手动启用
             pi: true,
+            mcode: true,
+            copilot_byok: true,
+            copilot_cli: true,
         }
     }
 }
@@ -76,9 +85,12 @@ impl VisibleApps {
             AppType::Gemini => self.gemini,
             AppType::GrokBuild => self.grokbuild,
             AppType::OpenCode => self.opencode,
+            AppType::CopilotByok => self.copilot_byok,
+            AppType::CopilotCli => self.copilot_cli,
             AppType::OpenClaw => self.openclaw,
             AppType::Hermes => self.hermes,
             AppType::Pi => self.pi,
+            AppType::Mcode => self.mcode,
         }
     }
 }
@@ -367,6 +379,10 @@ pub struct AppSettings {
     /// 是否在主页面启用本地代理功能（默认关闭）
     #[serde(default)]
     pub enable_local_proxy: bool,
+    /// 是否在主页面显示 Stack 模式开关（默认关闭）。和 `enable_local_proxy` 二选一，只影响
+    /// Claude Code、Codex：它们的开关换成 Stack 模式开关，其余应用仍显示路由开关。
+    #[serde(default)]
+    pub enable_stack_mode: bool,
     /// User has confirmed the local proxy first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_confirmed: Option<bool>,
@@ -375,6 +391,11 @@ pub struct AppSettings {
     pub usage_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_dashboard_refresh_interval_ms: Option<u32>,
+    /// 会话用量自动扫描开关（默认开启=自动模式）。关闭后停止后台定时扫描
+    /// 各客户端会话日志，仅在用户点击"立即同步"时手动扫描；只管扫描时机，
+    /// 代理接管记账与启动费用回填（不读会话文件）不受此开关影响。
+    #[serde(default = "default_session_auto_sync_enabled")]
+    pub session_auto_sync_enabled: bool,
     /// Whether to show the failover toggle independently on the main page
     #[serde(default)]
     pub enable_failover_toggle: bool,
@@ -485,7 +506,7 @@ pub struct AppSettings {
 
     // ===== 终端设置 =====
     /// 首选终端应用（可选，默认使用系统默认终端）
-    /// - macOS: "terminal" | "iterm2" | "warp" | "alacritty" | "kitty" | "ghostty" | "wezterm" | "kaku"
+    /// - macOS: "terminal" | "iterm2" | "warp" | "alacritty" | "kitty" | "ghostty" | "otty" | "wezterm" | "kaku"
     /// - Windows: "cmd" | "powershell" | "wt" (Windows Terminal)
     /// - Linux: "gnome-terminal" | "konsole" | "xfce4-terminal" | "alacritty" | "kitty" | "ghostty"
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -508,6 +529,10 @@ fn default_show_profile_switcher() -> bool {
     true
 }
 
+fn default_session_auto_sync_enabled() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -519,9 +544,11 @@ impl Default for AppSettings {
             launch_on_startup: false,
             silent_startup: false,
             enable_local_proxy: false,
+            enable_stack_mode: false,
             proxy_confirmed: None,
             usage_confirmed: None,
             usage_dashboard_refresh_interval_ms: None,
+            session_auto_sync_enabled: true,
             enable_failover_toggle: false,
             show_profile_switcher: true,
             preserve_codex_official_auth_on_switch: false,
@@ -997,9 +1024,10 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
         AppType::Gemini => settings.current_provider_gemini.clone(),
         AppType::GrokBuild => settings.current_provider_grokbuild.clone(),
         AppType::OpenCode => settings.current_provider_opencode.clone(),
+        AppType::CopilotByok | AppType::CopilotCli => None,
         AppType::OpenClaw => settings.current_provider_openclaw.clone(),
         AppType::Hermes => settings.current_provider_hermes.clone(),
-        AppType::Pi => None,
+        AppType::Pi | AppType::Mcode => None,
     }
 }
 
@@ -1016,9 +1044,10 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
         AppType::Gemini => settings.current_provider_gemini = id_owned.clone(),
         AppType::GrokBuild => settings.current_provider_grokbuild = id_owned.clone(),
         AppType::OpenCode => settings.current_provider_opencode = id_owned.clone(),
+        AppType::CopilotByok | AppType::CopilotCli => {}
         AppType::OpenClaw => settings.current_provider_openclaw = id_owned.clone(),
         AppType::Hermes => settings.current_provider_hermes = id_owned.clone(),
-        AppType::Pi => {}
+        AppType::Pi | AppType::Mcode => {}
     })
 }
 
@@ -1038,8 +1067,10 @@ pub fn get_effective_current_provider(
     // 1. 从本地 settings 读取
     if let Some(local_id) = get_current_provider(app_type) {
         // 2. 验证该 ID 在数据库中存在
-        let providers = db.get_all_providers(app_type.as_str())?;
-        if providers.contains_key(&local_id) {
+        if db
+            .get_provider_by_id(&local_id, app_type.as_str())?
+            .is_some()
+        {
             // 存在，直接返回
             return Ok(Some(local_id));
         }
@@ -1192,6 +1223,7 @@ mod tests {
         .expect("visible apps");
 
         assert!(visible.is_visible(&AppType::ClaudeDesktop));
+        assert!(visible.copilot_byok);
     }
 
     #[test]
@@ -1217,5 +1249,15 @@ mod tests {
             resolve_override_path(r"~\pi\agent"),
             home.join("pi").join("agent")
         );
+    }
+
+    #[test]
+    fn visible_apps_can_hide_copilot_byok() {
+        let visible: VisibleApps = serde_json::from_value(serde_json::json!({
+            "copilotByok": false
+        }))
+        .expect("visible apps");
+
+        assert!(!visible.copilot_byok);
     }
 }

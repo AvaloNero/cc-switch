@@ -109,13 +109,32 @@ pub async fn get_config_status(
             Ok(ConfigStatus { exists, path })
         }
         AppType::OpenCode => {
-            let config_path = crate::opencode_config::get_opencode_config_path();
-            let exists = config_path.exists();
+            let config_path =
+                crate::opencode_config::get_opencode_config_path().map_err(|e| e.to_string())?;
+            let exists = config_path.try_exists().map_err(|e| e.to_string())?;
             let path = crate::opencode_config::get_opencode_dir()
                 .to_string_lossy()
                 .to_string();
 
             Ok(ConfigStatus { exists, path })
+        }
+        AppType::CopilotByok => {
+            let path = crate::copilot_byok::selected_language_model_paths()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .next()
+                .ok_or_else(|| "No VS Code Copilot sync target is selected".to_string())?;
+            Ok(ConfigStatus {
+                exists: path.exists(),
+                path: path.to_string_lossy().to_string(),
+            })
+        }
+        AppType::CopilotCli => {
+            let path = crate::copilot_byok::copilot_cli_home().map_err(|e| e.to_string())?;
+            Ok(ConfigStatus {
+                exists: path.exists(),
+                path: path.to_string_lossy().to_string(),
+            })
         }
         AppType::OpenClaw => {
             let config_path = crate::openclaw_config::get_openclaw_config_path();
@@ -134,6 +153,13 @@ pub async fn get_config_status(
                 .to_string();
 
             Ok(ConfigStatus { exists, path })
+        }
+        AppType::Mcode => {
+            let file = crate::mcode_config::config_path();
+            Ok(ConfigStatus {
+                exists: file.exists(),
+                path: file.parent().unwrap().to_string_lossy().into_owned(),
+            })
         }
         AppType::Pi => {
             let config_path = crate::pi_config::get_pi_models_path().map_err(|e| e.to_string())?;
@@ -165,9 +191,19 @@ pub async fn get_config_dir(app: String) -> Result<String, String> {
         AppType::Gemini => crate::gemini_config::get_gemini_dir(),
         AppType::GrokBuild => crate::grok_config::get_grok_config_dir(),
         AppType::OpenCode => crate::opencode_config::get_opencode_dir(),
+        AppType::CopilotByok => {
+            crate::copilot_byok::primary_profile_config_dir().map_err(|e| e.to_string())?
+        }
+        AppType::CopilotCli => {
+            crate::copilot_byok::copilot_cli_home().map_err(|e| e.to_string())?
+        }
         AppType::OpenClaw => crate::openclaw_config::get_openclaw_dir(),
         AppType::Hermes => crate::hermes_config::get_hermes_dir(),
         AppType::Pi => crate::pi_config::get_pi_agent_dir().map_err(|e| e.to_string())?,
+        AppType::Mcode => crate::mcode_config::config_path()
+            .parent()
+            .unwrap()
+            .to_path_buf(),
     };
 
     Ok(dir.to_string_lossy().to_string())
@@ -184,9 +220,19 @@ pub async fn open_config_folder(handle: AppHandle, app: String) -> Result<bool, 
         AppType::Gemini => crate::gemini_config::get_gemini_dir(),
         AppType::GrokBuild => crate::grok_config::get_grok_config_dir(),
         AppType::OpenCode => crate::opencode_config::get_opencode_dir(),
+        AppType::CopilotByok => {
+            crate::copilot_byok::primary_profile_config_dir().map_err(|e| e.to_string())?
+        }
+        AppType::CopilotCli => {
+            crate::copilot_byok::copilot_cli_home().map_err(|e| e.to_string())?
+        }
         AppType::OpenClaw => crate::openclaw_config::get_openclaw_dir(),
         AppType::Hermes => crate::hermes_config::get_hermes_dir(),
         AppType::Pi => crate::pi_config::get_pi_agent_dir().map_err(|e| e.to_string())?,
+        AppType::Mcode => crate::mcode_config::config_path()
+            .parent()
+            .unwrap()
+            .to_path_buf(),
     };
 
     if !config_dir.exists() {
@@ -299,23 +345,6 @@ pub async fn get_common_config_snippet(
         .map_err(|e| e.to_string())
 }
 
-/// 对前端编辑器里的 config.toml 文本做通用配置片段的合并/剥离。
-/// 放后端是为了走 toml_edit（保注释、保键序）；前端 smol-toml 的
-/// 整文档重序列化会破坏用户手写格式。
-#[tauri::command]
-pub async fn update_toml_common_config_snippet(
-    config_toml: String,
-    snippet_toml: String,
-    enabled: bool,
-) -> Result<String, String> {
-    crate::services::provider::update_toml_common_config_snippet(
-        &config_toml,
-        &snippet_toml,
-        enabled,
-    )
-    .map_err(|e| e.to_string())
-}
-
 #[tauri::command]
 pub async fn set_common_config_snippet(
     app_type: String,
@@ -323,30 +352,13 @@ pub async fn set_common_config_snippet(
     state: tauri::State<'_, crate::store::AppState>,
 ) -> Result<(), String> {
     let is_cleared = snippet.trim().is_empty();
-    let old_snippet = state
-        .db
-        .get_config_snippet(&app_type)
-        .map_err(|e| e.to_string())?;
 
     validate_common_config_snippet(&app_type, &snippet)?;
 
     let value = if is_cleared { None } else { Some(snippet) };
 
-    if matches!(app_type.as_str(), "claude" | "codex" | "gemini") {
-        if let Some(legacy_snippet) = old_snippet
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            let app = AppType::from_str(&app_type).map_err(|e| e.to_string())?;
-            crate::services::provider::ProviderService::migrate_legacy_common_config_usage(
-                state.inner(),
-                app,
-                legacy_snippet,
-            )
-            .map_err(|e| e.to_string())?;
-        }
-    }
-
+    // Claude Code、Codex、Gemini CLI 的片段已冻结：只存库，留给旧版、Lite、CLI 读；新版
+    // 既不按它迁移存量行，也不再用它重写 live（共享设置直接在供应商编辑器底部改）。
     state
         .db
         .set_config_snippet(&app_type, value)
@@ -355,15 +367,6 @@ pub async fn set_common_config_snippet(
         .db
         .set_config_snippet_cleared(&app_type, is_cleared)
         .map_err(|e| e.to_string())?;
-
-    if matches!(app_type.as_str(), "claude" | "codex" | "gemini") {
-        let app = AppType::from_str(&app_type).map_err(|e| e.to_string())?;
-        crate::services::provider::ProviderService::sync_current_provider_for_app(
-            state.inner(),
-            app,
-        )
-        .map_err(|e| e.to_string())?;
-    }
 
     if app_type == "omo"
         && state
