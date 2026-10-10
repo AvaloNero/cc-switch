@@ -158,7 +158,11 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
         gemini: false,
         grokbuild: false,
         opencode: false,
+        copilot_byok: false,
+        copilot_cli: false,
         hermes: false,
+        mcode: false,
+        pi: false,
     };
 
     for app in apps_str.split(',') {
@@ -168,11 +172,15 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
             "gemini" => apps.gemini = true,
             "grokbuild" | "grok" => apps.grokbuild = true,
             "opencode" => apps.opencode = true,
+            "copilot-byok" | "vscode-copilot" => apps.copilot_byok = true,
+            "copilot-cli" => apps.copilot_cli = true,
             "openclaw" => {
                 // OpenClaw doesn't support MCP, ignore silently
                 log::debug!("OpenClaw doesn't support MCP, ignoring in apps parameter");
             }
             "hermes" => apps.hermes = true,
+            "mcode" => apps.mcode = true,
+            "pi" => apps.pi = true,
             other => {
                 return Err(AppError::InvalidInput(format!(
                     "Invalid app in 'apps': {other}"

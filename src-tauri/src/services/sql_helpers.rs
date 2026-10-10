@@ -20,7 +20,8 @@
 /// （usage_stats 成本重算）与展示侧（本文件的 SQL 归一）都必须引用这里，
 /// 防止同一语义散落多处后新增 app 时漏改（grokbuild 曾在回填侧漏掉）。
 /// 前端 `src/types/usage.ts` 的同名常量是跨语言的对应物，改动须同步。
-pub(crate) const CACHE_INCLUSIVE_APP_TYPES: &[&str] = &["codex", "gemini", "grokbuild"];
+pub(crate) const CACHE_INCLUSIVE_APP_TYPES: &[&str] =
+    &["codex", "gemini", "grokbuild", "copilot-cli"];
 
 /// `app_type` 的存储 `input_tokens` 是否已包含 cache read/write。
 pub(crate) fn is_cache_inclusive_app(app_type: &str) -> bool {
@@ -66,6 +67,23 @@ pub fn fresh_input_sql(alias: &str) -> String {
     )
 }
 
+/// 单行的「真实消耗 Tokens」：新增输入 + 输出 + 缓存写入 + 缓存命中。
+///
+/// 与 `usage_stats::derive_real_total_and_hit_rate`（指标卡 / 趋势图）同口径，
+/// 供应商、模型等分组统计的 `total_tokens` 都用它，保证各行之和等于顶部总数。
+pub fn real_total_tokens_sql(alias: &str) -> String {
+    let prefix = if alias.is_empty() {
+        String::new()
+    } else {
+        format!("{alias}.")
+    };
+    let fresh_input = fresh_input_sql(alias);
+    format!(
+        "(({fresh_input}) + {prefix}output_tokens \
+          + {prefix}cache_creation_tokens + {prefix}cache_read_tokens)"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,6 +121,7 @@ mod tests {
         assert!(sql.contains("'codex'"));
         assert!(sql.contains("'gemini'"));
         assert!(sql.contains("'grokbuild'"));
+        assert!(sql.contains("'copilot-cli'"));
     }
 
     #[test]
@@ -129,6 +148,15 @@ mod tests {
             [],
         )
         .unwrap();
+        // Copilot CLI's cumulative input includes both cache reads and writes.
+        conn.execute(
+            "INSERT INTO proxy_request_logs (
+                request_id, app_type, input_tokens, cache_read_tokens,
+                cache_creation_tokens, input_token_semantics
+             ) VALUES ('copilot-cli-1', 'copilot-cli', 900, 300, 100, 1)",
+            [],
+        )
+        .unwrap();
         // Claude row: Anthropic semantics — input_tokens already excludes cache.
         conn.execute(
             "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
@@ -141,7 +169,7 @@ mod tests {
         let sql = format!("SELECT COALESCE(SUM({expr}), 0) FROM proxy_request_logs l");
         let total: i64 = conn.query_row(&sql, [], |r| r.get(0)).unwrap();
         // Codex: 400; Gemini: 500; Grok Build: 450; Claude: 200 unchanged.
-        assert_eq!(total, 400 + 500 + 450 + 200);
+        assert_eq!(total, 400 + 500 + 450 + 500 + 200);
     }
 
     #[test]

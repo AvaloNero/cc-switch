@@ -17,6 +17,92 @@ type OmoProviderRow = (
 );
 
 impl Database {
+    /// Detach Codex providers bound to these deleted local accounts, atomically.
+    /// Only this device's account IDs are passed in: provider rows sync across
+    /// devices, and a row bound to another device's account must stay bound.
+    /// Keep raw JSON so unrelated and future metadata survives the update.
+    pub(crate) fn unbind_codex_managed_accounts(
+        &self,
+        account_ids: &[String],
+    ) -> Result<Vec<String>, AppError> {
+        if account_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, meta, settings_config, category,
+                        trim(json_extract(meta, '$.authBinding.accountId')) FROM providers
+                 WHERE app_type = 'codex'
+                   AND json_extract(meta, '$.authBinding.source') = 'managed_account'
+                   AND json_extract(meta, '$.authBinding.authProvider') = 'codex_oauth'
+                 ORDER BY id",
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                })
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AppError::Database(e.to_string()))?
+        };
+        let mut affected = Vec::new();
+        for (id, meta_text, settings_text, category, bound) in rows {
+            if !bound.is_some_and(|bound| account_ids.iter().any(|id| id.trim() == bound)) {
+                continue;
+            }
+            let parse_error = |error: serde_json::Error| {
+                AppError::Database(format!("供应商 {id} 配置无效: {error}"))
+            };
+            let mut meta: serde_json::Value =
+                serde_json::from_str(&meta_text).map_err(parse_error)?;
+            let mut settings: serde_json::Value =
+                serde_json::from_str(&settings_text).map_err(parse_error)?;
+            let mut provider = Provider::with_id(id.clone(), String::new(), settings.clone(), None);
+            provider.category = category;
+            provider.meta = Some(serde_json::from_value(meta.clone()).map_err(parse_error)?);
+            if provider.category.is_none()
+                && crate::proxy::providers::is_codex_official_provider(&provider)
+            {
+                provider.category = Some("official".to_string());
+            }
+            meta.as_object_mut()
+                .ok_or_else(|| AppError::Config(format!("供应商 {id} 的 meta 必须是对象")))?
+                .remove("authBinding");
+            settings
+                .as_object_mut()
+                .ok_or_else(|| {
+                    AppError::Config(format!("供应商 {id} 的 settings_config 必须是对象"))
+                })?
+                .insert("auth".to_string(), serde_json::json!({}));
+            tx.execute(
+                "UPDATE providers SET meta = ?1, settings_config = ?2, category = ?3
+                 WHERE app_type = 'codex' AND id = ?4",
+                params![
+                    meta.to_string(),
+                    settings.to_string(),
+                    provider.category,
+                    id
+                ],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+            affected.push(id);
+        }
+        tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(affected)
+    }
+
     pub fn get_all_providers(
         &self,
         app_type: &str,
@@ -383,6 +469,77 @@ impl Database {
             params![id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Atomically replaces every provider in a dedicated catalog namespace.
+    ///
+    /// This is intentionally separate from `save_provider`: callers that own a
+    /// complete, ordered catalog need all rows (and their endpoint rows) to move
+    /// together or not at all.
+    pub fn replace_provider_catalog(
+        &self,
+        app_type: &str,
+        providers: &[Provider],
+    ) -> Result<(), AppError> {
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        tx.execute(
+            "DELETE FROM provider_endpoints WHERE app_type = ?1",
+            params![app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.execute(
+            "DELETE FROM providers WHERE app_type = ?1",
+            params![app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        for provider in providers {
+            let mut meta = provider.meta.clone().unwrap_or_default();
+            let endpoints = std::mem::take(&mut meta.custom_endpoints);
+            tx.execute(
+                "INSERT INTO providers (
+                    id, app_type, name, settings_config, website_url, category,
+                    created_at, sort_index, notes, icon, icon_color, meta,
+                    is_current, in_failover_queue
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13)",
+                params![
+                    provider.id,
+                    app_type,
+                    provider.name,
+                    serde_json::to_string(&provider.settings_config).map_err(|e| {
+                        AppError::Database(format!("Failed to serialize settings_config: {e}"))
+                    })?,
+                    provider.website_url,
+                    provider.category,
+                    provider.created_at,
+                    provider.sort_index,
+                    provider.notes,
+                    provider.icon,
+                    provider.icon_color,
+                    serde_json::to_string(&meta).map_err(|e| AppError::Database(format!(
+                        "Failed to serialize meta: {e}"
+                    )))?,
+                    provider.in_failover_queue,
+                ],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+            for (url, endpoint) in endpoints {
+                tx.execute(
+                    "INSERT INTO provider_endpoints (provider_id, app_type, url, added_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![provider.id, app_type, url, endpoint.added_at],
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            }
+        }
+
+        tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
     }
 
